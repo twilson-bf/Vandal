@@ -1,0 +1,11 @@
+.venv/
+.tools/
+.cache/
+__pycache__/
+*.py[cod]
+.env
+data/
+*.db
+*.db-shm
+*.db-wal
+vandal/static/fonts/local/

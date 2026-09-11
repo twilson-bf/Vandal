@@ -1,0 +1,1 @@
+CREATE TABLE enrichment(kind TEXT NOT NULL,key TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'queued',result TEXT NOT NULL DEFAULT '{}',error TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,next_attempt REAL NOT NULL DEFAULT 0,updated_at TEXT,PRIMARY KEY(kind,key));

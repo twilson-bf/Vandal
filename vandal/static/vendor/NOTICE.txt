@@ -1,0 +1,26 @@
+Bundled assets adapted from the local LotusPetal workspace.
+
+d3-array, d3-geo, internmap, topojson-client
+Copyright holders and versions are retained in each JavaScript file's header.
+Distributed under the ISC license:
+
+Permission to use, copy, modify, and/or distribute this software for any purpose
+with or without fee is hereby granted, provided that the above copyright notice
+and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
+countries-110m.json: world-atlas geometry derived from Natural Earth public-domain
+map data. Map locations are illustrative and not a statement about sovereignty.
+
+Fonts: see ../fonts/OFL.txt. Only the bundled open-font fallbacks are included.
+
+globe.gl 2.46.1 (bundled Three.js / three-globe renderer), copied from LotusPetal.
+Upstream: https://github.com/vasturiano/globe.gl
+MIT license: see globe.gl.LICENSE; bundled dependency notices remain in the bundle.

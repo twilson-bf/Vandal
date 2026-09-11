@@ -1,0 +1,17 @@
+# Application and ingestion dependencies; exact transitive pins are in runtime.lock.
+fastapi
+uvicorn
+sqlalchemy
+alembic
+jinja2
+python-multipart
+dnspython
+httpx
+beautifulsoup4
+lxml
+defusedxml
+tldextract
+geoip2
+argon2-cffi
+pyyaml
+
