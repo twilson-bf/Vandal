@@ -1,6 +1,6 @@
 # Vandal interface playbook
 
-Status: proposed aesthetic direction. This document defines the visual and interaction rules for the next UI pass. It does not change application behavior.
+Status: historical planning document for the restrained terminal pass. The approved fantasy-tech direction supersedes this file and is defined in [design-bible.md](design-bible.md). Keep this document as the record of the earlier design reasoning; agents should use the design bible as the canonical implementation contract.
 
 ## Premise
 

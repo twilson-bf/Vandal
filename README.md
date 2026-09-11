@@ -3,6 +3,10 @@
 External assessment workspace, named for Vandal Blast. A local Python server joins
 scan evidence into a reusable inventory with an orange, LotusPetal-inspired interface.
 
+Interface work follows the canonical [fantasy-tech design bible](docs/design-bible.md).
+Agents and contributors should read it before changing layout, visual styling, raw-output
+presentation, scan controls, or interaction patterns.
+
 ## Start the workspace
 
 ```bash
