@@ -27,13 +27,13 @@ def executable(tool):
     return str(local) if local.is_file() else shutil.which(tool)
 
 
-def scope_targets(targets, rules):
+def scope_targets(targets, rules, limit_to_included=False):
     accepted, excluded = [], []
     includes = [r['target'] for r in rules if r['action'] == 'include']
     excludes = [r['target'] for r in rules if r['action'] == 'exclude']
     for value in targets:
         _, normalized = identity(value)
-        reason = 'Matches exclusion' if any(in_rule(normalized, x) for x in excludes) else 'No matching include rule' if not any(in_rule(normalized, x) for x in includes) else ''
+        reason = 'Matches exclusion' if any(in_rule(normalized, x) for x in excludes) else 'No matching include rule' if limit_to_included and not any(in_rule(normalized, x) for x in includes) else ''
         if reason:
             excluded.append({'target': normalized, 'reason': reason})
         elif normalized not in accepted:
@@ -41,7 +41,7 @@ def scope_targets(targets, rules):
     return accepted, excluded
 
 
-def prepare(profile, targets, config, rules, folder=None):
+def prepare(profile, targets, config, rules, folder=None, limit_to_included=False):
     if profile not in PROFILES:
         raise ValueError('Unknown scan profile')
     if not isinstance(targets, list) or not all(isinstance(t, str) for t in targets) or not targets or len(targets) > (5000 if profile=='gowitness-web' else 500):
@@ -50,9 +50,10 @@ def prepare(profile, targets, config, rules, folder=None):
         raise ValueError('Profile configuration must be an object')
     if any(len(t) > 2048 or t.startswith('-') for t in targets):
         raise ValueError('Invalid target')
-    accepted, excluded = scope_targets(targets, rules)
+    accepted, excluded = scope_targets(targets, rules, limit_to_included)
     if not accepted:
-        raise ValueError('No targets remain after scope rules. Add explicit include rules in Scope.')
+        suffix = ' Add an included group or disable “limit to included”.' if limit_to_included else ''
+        raise ValueError('No targets remain after scope rules.' + suffix)
     if profile in ('bbot-passive', 'dns-validate') and any(identity(t)[0] != 'hostname' for t in accepted):
         raise ValueError('This profile requires hostnames')
     if profile == 'httpx-web' and any(identity(t)[0] not in ('hostname', 'ip', 'url') for t in accepted):

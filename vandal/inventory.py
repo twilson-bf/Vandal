@@ -8,7 +8,7 @@ from .db import rows
 from .identity import in_rule, root_domain
 from .query import VISIBLE
 
-KEYS = {'hostname','ip','net','port','product','service','country','org','asn','source','has','scanned','scope','coverage','cve'}
+KEYS = {'hostname','ip','net','port','product','service','country','org','asn','source','has','scanned','scope','scope_tag','coverage','cve'}
 
 def tokens(text):
     try:
@@ -62,6 +62,10 @@ def build(con,eid,hide_passive=False):
     from .scope_rules import matcher
     is_excluded=matcher([r['target'] for r in rules if r['action']=='exclude'])
     is_included=matcher([r['target'] for r in rules if r['action']=='include'])
+    tagged=defaultdict(list)
+    for rule in rules:
+        tagged[rule.get('tag') or 'untagged'].append(rule['target'])
+    tag_matchers={tag:matcher(targets) for tag,targets in tagged.items()}
     for a in assets:
         aid=a['id']; associated=[byid[b] for b in linked[aid] if byid[b]['kind'] in ('hostname','ip')]
         a['associated']=[{'id':b['id'],'value':b['value'],'kind':b['kind']} for b in sorted(associated,key=lambda b:b['value'])]
@@ -87,7 +91,9 @@ def build(con,eid,hide_passive=False):
             a['sources']=sorted({o['source_format'] for owner in ownerids for o in observations[owner]} | {s for owner in ownerids for s in sources[owner] if s.startswith(('nmap','nessus'))})
         a['last_scan']=max((lastscan[x] for x in ownerids if x in lastscan),default=None)
         a['coverage']='scanned' if any(x in scanned for x in ownerids) else 'passive' if any(s['evidence']=='passive' for s in a['services']) else 'unscanned'
-        a['scope']='excluded' if is_excluded(a['value']) else 'included' if is_included(a['value']) else 'unassigned'
+        scope_values=[a['value'],*(b['value'] for b in associated)]
+        a['scope_tags']=sorted(tag for tag,match in tag_matchers.items() if any(match(value) for value in scope_values))
+        a['scope']='excluded' if any(is_excluded(value) for value in scope_values) else 'included' if any(is_included(value) for value in scope_values) else 'unassigned'
     return assets
 
 
@@ -109,6 +115,7 @@ def matches(a,terms):
         elif k=='has':found=any(s['state']=='open' for s in a['services']) if v=='ports' else bool(a['potential'] or a['confirmed'])
         elif k=='scanned':found=(a['coverage']=='scanned')==(v=='true')
         elif k in ('scope','coverage'):found=a[k]==v
+        elif k=='scope_tag':found=any(tag.lower()==v for tag in a.get('scope_tags',[]))
         elif k=='source':found=any(v in s for s in a['sources'])
         elif k=='cve':found=any(v in f['title'].lower() for f in a['findings'])
         elif k in ('country','org','asn'):found=v in str(a.get('provider' if k=='org' else k,'')).lower()
@@ -136,6 +143,7 @@ def search(con,eid,params,projected=False):
     facets={}
     for key in ('country','domain','coverage','scope'):
         facets[key]=Counter(a[key] for a in items if a[key]).most_common(8)
+    facets['scope_tag']=Counter(tag for a in items for tag in a.get('scope_tags',[])).most_common()
     facets['domain']=Counter(d for a in items for d in ({a['domain']} if a['kind']=='hostname' else {root_domain(b['value']) for b in a['associated'] if b['kind']=='hostname'}) if d).most_common()
     facets['org']=Counter(a['provider'] for a in items if a['provider']).most_common(8)
     cve_counts=Counter(c for a in items for c in {m for f in a['findings'] for m in re.findall(r'CVE-\d{4}-\d{4,}', f['title'])})

@@ -8,6 +8,7 @@ import time
 from .db import connect, data_dir, dump, now, rows, ROOT
 from .ingest import ingest, queue_import, enrich_geo
 from .jobs import prepare, validate_resolutions, PROFILES, executable
+from .scope_rules import policy
 
 stop = threading.Event()
 
@@ -29,8 +30,8 @@ def execute(job):
     status, error, code, import_ids = 'failed', '', None, []
     try:
         with connect() as con:
-            rules = rows(con, 'SELECT * FROM scope_rules WHERE engagement_id=?', (job['engagement_id'],))
-        plan = prepare(job['profile'], json.loads(job['targets']), json.loads(job['config']), rules, folder)
+            rules, limited = policy(con, job['engagement_id'])
+        plan = prepare(job['profile'], json.loads(job['targets']), json.loads(job['config']), rules, folder, limited)
         if plan['targets'] != json.loads(job['targets']):
             raise ValueError('Scope changed after queuing; review and create a new job')
         (folder / 'targets.txt').write_text('\n'.join(plan.get('scan_targets', plan['targets'])) + '\n')

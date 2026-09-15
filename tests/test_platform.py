@@ -314,7 +314,7 @@ class PlatformTests(unittest.TestCase):
         self.client.post(self.base+f'/imports/{iid}/archive')
         self.assertEqual(self.client.get(self.base+'/assets?has_ports=yes').json()['total'], 0)
 
-    def test_quick_scan_scopes_ip_unions_ports_and_deduplicates(self):
+    def test_quick_scan_unions_ports_and_deduplicates_without_scope_write(self):
         self.load(NMAP.replace(b'portid="443"', b'portid="9443"'))
         asset = self.client.get(self.base+'/assets?primary=ip').json()['items'][0]
         with patch('vandal.jobs.executable', return_value='/usr/bin/nmap'):
@@ -328,7 +328,7 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(set(config['ports'].split(',')), {'22','80','443','445','3389','8080','8443','9443'})
         self.assertTrue(config['geolocate'])
         self.assertEqual(json.loads(job['targets']), ['192.0.2.1'])
-        self.assertEqual(len(self.client.get(self.base+'/scope').json()), 1)
+        self.assertEqual(self.client.get(self.base+'/scope').json(), [])
 
     def test_quick_scan_respects_exclusions_and_rolls_back_missing_tool(self):
         self.load(NMAP)

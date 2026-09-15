@@ -42,13 +42,13 @@ The current version includes:
 - Broad items of interest with evidence links; vulnerability confirmation is a manual
   analyst decision. Nothing is automatically promoted to a confirmed vulnerability.
 - Logged BBOT passive discovery with DNS resolution, independent DNS validation, Nmap service scans and
-  ProjectDiscovery httpx jobs. Scope includes/excludes, command previews, cancellation,
+  ProjectDiscovery httpx jobs. Tagged scope groups, command previews, cancellation,
   stdout/stderr downloads, automatic result ingestion and CSV/JSON timeline exports.
 - Authentication, admin/operator/viewer roles, engagement memberships and mutation audit.
 
 Overview is the home page: inventory, coverage, active/recent scans, imports and
 new review items. **New scan** remains in the global header. It accepts pasted
-targets and optionally adds them to scope, showing additions in the command preview.
+targets, the current Explore selection, or a visible included scope group.
 
 Explore defaults to hostname-first results, with IP-only rows where no associated
 hostname is known. IP-first and hostnames-only modes remain available, independently sorted by
@@ -66,12 +66,13 @@ hostname:kohler.co.in port:443
 product:nginx country:"United States"
 has:vuln source:shodan
 scanned:false scope:included
+scope_tag:"EPT inventory"
 has:ports -port:443
 ```
 
 Supported fields: `hostname`, `ip`, `net`, `port`, `product`, `service`, `country`
 (country name), `org`, `asn`, `source`, `has` (`ports`/`vuln`), `scanned` (`true`/`false`),
-`scope` (`included`/`excluded`/`unassigned`), `coverage` (`scanned`/`passive`/`unscanned`),
+`scope` (`included`/`excluded`/`unassigned`), `scope_tag`, `coverage` (`scanned`/`passive`/`unscanned`),
 and `cve`. Plain text searches identities, tags, provider and retained service output.
 Unsupported filters show an error without removing the search controls. This is a
 documented subset, not full Shodan query compatibility. Facets count matching assets.
@@ -117,8 +118,11 @@ but their artifacts and analyst annotations remain intact.
 
 ## Scan execution
 
-Add explicit include/exclude rules under **Scope**, select assets in **Explore**, then
-choose **New scan**. Preview and run the command. No freeform shell execution is exposed.
+Select assets in **Explore**, enter targets, or load an included tagged group, then
+choose **New scan**. Inventory is open by default: a target does not need a scope rule.
+Enable **Limit scans to included groups** under Scope when an engagement requires an
+allowlist. Excluded groups always block execution. Preview and run the command. No
+freeform shell execution is exposed.
 Nmap accepts IPs and hostnames. Hostname previews show all resolved addresses for the
 selected family (IPv4 by default). Excluded addresses block the target. DNS mappings
 are checked again when queuing and dispatching; changes require a new preview. Nmap
@@ -169,8 +173,8 @@ fallbacks when local fonts are absent.
 | `VANDAL_WORKER=0` | Disable the automatic worker (tests or an independently managed worker) |
 | `VANDAL_GEOIP_CITY`, `VANDAL_GEOIP_ASN` | Local MaxMind-compatible databases |
 
-The **Scope + Nmap** action on IP rows and IP details adds that exact IP to scope,
-then queues a logged service scan using Vandal's defaults (22,80,443,445,3389,8080,8443)
+The **Nmap host** action on IP rows and IP details queues a logged service scan using
+Vandal's defaults (22,80,443,445,3389,8080,8443)
 plus observed TCP ports on the IP and its associated hostnames. Exclusions take
 precedence. Repeated clicks reuse an active Nmap job for that IP.
 
@@ -321,14 +325,14 @@ The renderer and country geometry are served locally, without external map tiles
 
 Scope accepts pasted newline/comma-separated targets and UTF-8 text files (including
 headerless CSV lists), with IPv4/IPv6 addresses, CIDRs, hostnames, and inclusive
-`start-IP - end-IP` ranges. Preview shows normalized rules and the matching asset
-count; repeated submissions do not duplicate rules. Domain rules cover subdomains.
-Exclusions apply to project read APIs, inventory, maps, findings, relationships,
-records, import summaries and scan history. Mixed raw records and original files
-containing excluded assets are hidden rather than partially rewriting evidence.
-Original data remains intact; remove exclusions in Scope to restore visibility.
-Queued scans recheck scope before dispatch. Adding exclusions cancels matching
-queued jobs and requests cancellation of matching running jobs.
+`start-IP - end-IP` ranges. Each submission belongs to a tag. A group can be switched
+between included and excluded, and independently hidden or visible. Hiding removes
+matching assets and linked evidence from inventory, maps, findings, search selection,
+import summaries, and scan history while retaining the source data. Domain rules cover
+subdomains. Existing groups appear as `scope_tag` facets in Explore and can populate a
+new scan's editable target list. Hidden or excluded groups cannot be selected as a scan
+source. Queued scans recheck policy before dispatch; exclusions and a newly enabled
+include limit cancel work that no longer passes.
 
 For Windows LAN access, start Vandal with the Windows LAN address allowed:
 `python run.py --wsl --allow-host 192.168.1.77`.
@@ -341,8 +345,8 @@ Windows DHCP or a WSL restart changes them. The normal Vandal login still applie
 
 Explore → **Web capture** opens the scan composer with checked assets, or every
 matching inventory result across all pages if nothing is checked. With no filters,
-this uses the full visible inventory. The target list is editable. The normal
-scope preview and optional “Add entered targets to scope” apply before execution.
+this uses the full visible inventory. The target list is editable, and the current
+scope policy is checked before execution.
 
 The **Web inventory & screenshots** profile snapshots each host's observed open TCP
 ports, including associated IP service observations for hostnames. Ports 80/443 can

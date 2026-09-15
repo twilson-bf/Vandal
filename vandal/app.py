@@ -19,7 +19,7 @@ from . import auth
 from .db import ROOT, connect, data_dir, migrate, now, rows, dump
 from .ingest import queue_import, MAX_UPLOAD
 from . import query
-from .jobs import PROFILES, executable, prepare, DEFAULT_NMAP_PORTS
+from .jobs import PROFILES, executable, prepare, DEFAULT_NMAP_PORTS, scope_targets
 from .identity import identity, in_rule
 from .redact import command as redact_command
 from .parsers import timestamp
@@ -71,6 +71,30 @@ async def invalid(request, exc):
 
 def audit(con, engagement, actor, action, detail):
     con.execute('INSERT INTO audit(engagement_id,actor,action,detail,created_at) VALUES (?,?,?,?,?)', (engagement, actor, action, dump(detail), now()))
+
+
+def scope_tag(value):
+    value = str(value or '').strip()
+    if not value:
+        value = 'untagged'
+    if len(value) > 80 or '/' in value or any(ord(c) < 32 for c in value):
+        raise ValueError('Tag must be 1–80 printable characters and cannot contain /')
+    return value
+
+
+def cancel_jobs_outside_policy(con, eid, actor, rules, limit_to_included, reason):
+    """Stop work that would no longer pass the current scope policy."""
+    cancelled = []
+    for job in rows(con, "SELECT * FROM jobs WHERE engagement_id=? AND status IN ('queued','running')", (eid,)):
+        accepted, rejected = scope_targets(json.loads(job['targets']), rules, limit_to_included)
+        if rejected:
+            if job['status'] == 'queued':
+                con.execute("UPDATE jobs SET status='cancelled',cancel_requested=1,ended_at=? WHERE id=?", (now(), job['id']))
+            else:
+                con.execute('UPDATE jobs SET cancel_requested=1 WHERE id=?', (job['id'],))
+            cancelled.append(job['id'])
+            audit(con, eid, actor, 'job.cancel_requested', {'id': job['id'], 'reason': reason, 'rejected': rejected})
+    return cancelled
 
 
 def one(con, table, key, engagement):
@@ -293,7 +317,8 @@ def projection_version(eid: int, request: Request):
         parts=[rows(con,'SELECT max(id) AS last,count(*) AS count FROM records WHERE engagement_id=?',(eid,)),
                rows(con,'SELECT id,active,status,finished_at FROM imports WHERE engagement_id=? ORDER BY id',(eid,)),
                rows(con,'SELECT id,confirmed,status,updated_at FROM interests WHERE engagement_id=? ORDER BY id',(eid,)),
-               rows(con,'SELECT id,action,target FROM scope_rules WHERE engagement_id=? ORDER BY id',(eid,)),
+               rows(con,'SELECT id,action,target,tag,hidden FROM scope_rules WHERE engagement_id=? ORDER BY id',(eid,)),
+               rows(con,'SELECT scope_mode FROM engagements WHERE id=?',(eid,)),
                rows(con,"SELECT max(updated_at) AS updated FROM enrichment WHERE kind='cve'")]
     return {'version':hashlib.sha256(json.dumps(parts,sort_keys=True).encode()).hexdigest()}
 
@@ -518,7 +543,111 @@ def save_finding(eid: int, request: Request, body: dict = Body(...), fid: int = 
 def scope(eid: int, request: Request):
     auth.access(request, eid)
     with connect() as con:
-        return rows(con, 'SELECT * FROM scope_rules WHERE engagement_id=? ORDER BY id', (eid,))
+        return rows(con, 'SELECT * FROM scope_rules WHERE engagement_id=? ORDER BY tag,target,id', (eid,))
+
+
+@app.get('/api/e/{eid}/scope/settings')
+def scope_settings(eid: int, request: Request):
+    auth.access(request, eid)
+    with connect() as con:
+        mode = con.execute('SELECT scope_mode FROM engagements WHERE id=?', (eid,)).fetchone()['scope_mode']
+    return {'mode': mode, 'limit_to_included': mode == 'included'}
+
+
+@app.patch('/api/e/{eid}/scope/settings')
+def update_scope_settings(eid: int, request: Request, body: dict = Body(...)):
+    actor = auth.access(request, eid, True)
+    if not isinstance(body.get('limit_to_included'), bool):
+        raise ValueError('limit_to_included must be true or false')
+    mode = 'included' if body['limit_to_included'] else 'open'
+    from .scope_rules import policy
+    with connect() as con:
+        con.execute('UPDATE engagements SET scope_mode=? WHERE id=?', (mode, eid))
+        rules, limited = policy(con, eid)
+        cancelled = cancel_jobs_outside_policy(con, eid, actor['name'], rules, limited, 'Scope mode changed')
+        audit(con, eid, actor['name'], 'scope.mode_changed', {'mode': mode, 'cancelled_jobs': cancelled})
+    return {'mode': mode, 'limit_to_included': mode == 'included', 'cancelled_jobs': cancelled}
+
+
+@app.get('/api/e/{eid}/scope/groups')
+def scope_groups(eid: int, request: Request):
+    auth.access(request, eid)
+    with connect() as con:
+        rules = rows(con, 'SELECT * FROM scope_rules WHERE engagement_id=? ORDER BY tag,target,id', (eid,))
+        assets = [r['value'] for r in con.execute('SELECT value FROM assets WHERE engagement_id=?', (eid,))]
+    groups = {}
+    from .scope_rules import matcher
+    for rule in rules:
+        group = groups.setdefault(rule['tag'], {'tag': rule['tag'], 'rules': [], 'actions': set(), 'hidden_states': set()})
+        group['rules'].append(rule)
+        group['actions'].add(rule['action'])
+        group['hidden_states'].add(bool(rule['hidden']))
+    result = []
+    for group in groups.values():
+        match = matcher([r['target'] for r in group['rules']])
+        action = next(iter(group['actions'])) if len(group['actions']) == 1 else 'mixed'
+        hidden = next(iter(group['hidden_states'])) if len(group['hidden_states']) == 1 else None
+        result.append({**group, 'actions': sorted(group['actions']), 'hidden_states': sorted(group['hidden_states']),
+                       'action': action, 'hidden': hidden, 'rule_count': len(group['rules']),
+                       'matched_assets': sum(match(value) for value in assets)})
+    return result
+
+
+@app.patch('/api/e/{eid}/scope/groups/{tag}')
+def update_scope_group(eid: int, tag: str, request: Request, body: dict = Body(...)):
+    actor = auth.access(request, eid, True)
+    tag = scope_tag(tag)
+    action = body.get('action')
+    hidden = body.get('hidden')
+    if action is not None and action not in ('include', 'exclude'):
+        raise ValueError('Choose include or exclude')
+    if hidden is not None and not isinstance(hidden, bool):
+        raise ValueError('hidden must be true or false')
+    if action is None and hidden is None:
+        raise ValueError('Choose a group state to change')
+    from .scope_rules import policy
+    with connect() as con:
+        if not con.execute('SELECT 1 FROM scope_rules WHERE engagement_id=? AND tag=?', (eid, tag)).fetchone():
+            raise HTTPException(404, 'Scope group not found')
+        if action is not None:
+            con.execute('UPDATE scope_rules SET action=? WHERE engagement_id=? AND tag=?', (action, eid, tag))
+        if hidden is not None:
+            con.execute('UPDATE scope_rules SET hidden=? WHERE engagement_id=? AND tag=?', (int(hidden), eid, tag))
+        rules, limited = policy(con, eid)
+        cancelled = cancel_jobs_outside_policy(con, eid, actor['name'], rules, limited, 'Scope group changed') if action == 'exclude' else []
+        audit(con, eid, actor['name'], 'scope.group_changed', {'tag': tag, 'action': action, 'hidden': hidden, 'cancelled_jobs': cancelled})
+    return {'ok': True, 'cancelled_jobs': cancelled}
+
+
+@app.delete('/api/e/{eid}/scope/groups/{tag}')
+def delete_scope_group(eid: int, tag: str, request: Request):
+    actor = auth.access(request, eid, True)
+    tag = scope_tag(tag)
+    with connect() as con:
+        count = con.execute('DELETE FROM scope_rules WHERE engagement_id=? AND tag=?', (eid, tag)).rowcount
+        if not count:
+            raise HTTPException(404, 'Scope group not found')
+        from .scope_rules import policy
+        rules, limited = policy(con, eid)
+        cancelled = cancel_jobs_outside_policy(con, eid, actor['name'], rules, limited, 'Included scope group removed') if limited else []
+        audit(con, eid, actor['name'], 'scope.group_removed', {'tag': tag, 'rules': count, 'cancelled_jobs': cancelled})
+    return {'ok': True, 'removed': count, 'cancelled_jobs': cancelled}
+
+
+@app.get('/api/e/{eid}/scope/groups/{tag}/targets')
+def scope_group_targets(eid: int, tag: str, request: Request):
+    auth.access(request, eid)
+    tag = scope_tag(tag)
+    with connect() as con:
+        rules = rows(con, 'SELECT action,target,hidden FROM scope_rules WHERE engagement_id=? AND tag=? ORDER BY target', (eid, tag))
+    if not rules:
+        raise HTTPException(404, 'Scope group not found')
+    if any(r['action'] == 'exclude' for r in rules):
+        raise ValueError('Switch this group to included before scanning it')
+    if any(r['hidden'] for r in rules):
+        raise ValueError('Unhide this group before scanning it')
+    targets = list(dict.fromkeys(r['target'] for r in rules))
+    return {'tag': tag, 'targets': targets, 'count': len(targets), 'source': 'scope_group'}
 
 
 @app.post('/api/e/{eid}/scope')
@@ -529,25 +658,28 @@ def add_scope(eid: int, request: Request, body: dict = Body(...)):
         raise ValueError('Choose include or exclude')
     from .scope_rules import parse_targets, matcher
     targets = parse_targets(body.get('targets', target))
+    tag = scope_tag(body.get('tag', body.get('reason', '')))
+    hidden = body.get('hidden', action == 'exclude')
+    if not isinstance(hidden, bool):
+        raise ValueError('hidden must be true or false')
     with connect() as con:
         matches = matcher(targets)
         affected = sum(matches(r['value']) for r in con.execute('SELECT value FROM assets WHERE engagement_id=?', (eid,)))
         if body.get('preview') is True:
             return {'targets': targets, 'matched_assets': affected}
         added = 0
+        # A tag is an operational group: new entries adopt one shared state.
+        con.execute('UPDATE scope_rules SET action=?,hidden=? WHERE engagement_id=? AND tag=?', (action, int(hidden), eid, tag))
         for value in targets:
-            if not con.execute('SELECT 1 FROM scope_rules WHERE engagement_id=? AND action=? AND target=?', (eid, action, value)).fetchone():
-                con.execute('INSERT INTO scope_rules(engagement_id,action,target,reason) VALUES (?,?,?,?)', (eid, action, value, str(body.get('reason', ''))[:1000]))
+            existing = con.execute('SELECT id FROM scope_rules WHERE engagement_id=? AND tag=? AND target=?', (eid, tag, value)).fetchone()
+            if not existing:
+                con.execute('INSERT INTO scope_rules(engagement_id,action,target,reason,tag,hidden) VALUES (?,?,?,?,?,?)', (eid, action, value, '', tag, int(hidden)))
                 added += 1
+        from .scope_rules import policy
+        rules, limited = policy(con, eid)
         if action == 'exclude':
-            for job in rows(con, "SELECT * FROM jobs WHERE engagement_id=? AND status IN ('queued','running')", (eid,)):
-                if any(matches(value) for value in json.loads(job['targets'])):
-                    if job['status'] == 'queued':
-                        con.execute("UPDATE jobs SET status='cancelled',cancel_requested=1,ended_at=? WHERE id=?", (now(), job['id']))
-                    else:
-                        con.execute('UPDATE jobs SET cancel_requested=1 WHERE id=?', (job['id'],))
-                    audit(con, eid, actor['name'], 'job.cancel_requested', {'id': job['id'], 'reason': 'Scope exclusion'})
-        audit(con, eid, actor['name'], 'scope.added', {'action': action, 'targets': targets, 'reason': body.get('reason', '')})
+            cancel_jobs_outside_policy(con, eid, actor['name'], rules, limited, 'Scope exclusion')
+        audit(con, eid, actor['name'], 'scope.added', {'action': action, 'targets': targets, 'tag': tag, 'hidden': hidden})
     return {'ok': True, 'added': added, 'matched_assets': affected}
 
 
@@ -557,8 +689,11 @@ def delete_scope(eid: int, sid: int, request: Request):
     with connect() as con:
         old = one(con, 'scope_rules', sid, eid)
         con.execute('DELETE FROM scope_rules WHERE id=?', (sid,))
-        audit(con, eid, actor['name'], 'scope.removed', old)
-    return {'ok': True}
+        from .scope_rules import policy
+        rules, limited = policy(con, eid)
+        cancelled = cancel_jobs_outside_policy(con, eid, actor['name'], rules, limited, 'Included scope rule removed') if limited and old['action'] == 'include' else []
+        audit(con, eid, actor['name'], 'scope.removed', {**old, 'cancelled_jobs': cancelled})
+    return {'ok': True, 'cancelled_jobs': cancelled}
 
 
 @app.get('/api/e/{eid}/views')
@@ -593,7 +728,8 @@ def create_job(eid: int, request: Request, body: dict = Body(...)):
         raise ValueError('Invalid scan configuration')
     config = dict(config)
     with connect() as con:
-        rules = rows(con, 'SELECT * FROM scope_rules WHERE engagement_id=?', (eid,))
+        from .scope_rules import policy
+        rules, limited = policy(con, eid)
         additions = []
         if body.get('add_scope') is True:
             for target in body.get('targets', []):
@@ -601,10 +737,10 @@ def create_job(eid: int, request: Request, body: dict = Body(...)):
                 if kind not in ('ip','hostname','url'):
                     raise ValueError('Enter individual IPs, hostnames or URLs')
                 if not any(r['action']=='include' and r['target']==value for r in rules):
-                    rule = {'action':'include','target':value,'reason':'New scan: add entered targets to scope'}
+                    rule = {'action':'include','target':value,'tag':'scan-added','hidden':0}
                     rules.append(rule)
                     additions.append(rule)
-        plan = prepare(body.get('profile'), body.get('targets', []), config, rules)
+        plan = prepare(body.get('profile'), body.get('targets', []), config, rules, limit_to_included=limited)
         if body.get('profile') == 'gowitness-web':
             from .web_inventory import candidate_snapshot
             with connect(visible_eid=eid) as visible:
@@ -626,12 +762,12 @@ def create_job(eid: int, request: Request, body: dict = Body(...)):
         for rule in additions:
             if rule['target'] not in plan['targets']:
                 continue
-            con.execute('INSERT INTO scope_rules(engagement_id,action,target,reason) VALUES (?,?,?,?)', (eid, 'include', rule['target'], rule['reason']))
+            con.execute('INSERT INTO scope_rules(engagement_id,action,target,reason,tag,hidden) VALUES (?,?,?,?,?,?)', (eid, 'include', rule['target'], '', rule['tag'], 0))
             audit(con,eid,actor['name'],'scope.added',rule)
         jid = con.execute('INSERT INTO jobs(engagement_id,profile,actor,command,targets,excluded,config,created_at) VALUES (?,?,?,?,?,?,?,?)',
                           (eid, body['profile'], actor['name'], dump(plan['command']), dump(plan['targets']), dump(plan['excluded']), dump(config), now())).lastrowid
         folder = data_dir() / 'jobs' / str(jid)
-        exact = prepare(body['profile'], plan['targets'], config, rules, folder)
+        exact = prepare(body['profile'], plan['targets'], config, rules, folder, limited)
         con.execute('UPDATE jobs SET command=? WHERE id=?', (dump(exact['command']), jid))
         audit(con, eid, actor['name'], 'job.queued', {'id': jid, 'profile': body['profile']})
     return {'id': jid}
@@ -652,7 +788,8 @@ def scan_asset(eid: int, aid: int, request: Request):
         asset = one(con, 'assets', aid, eid)
         if asset['kind'] != 'ip':
             raise ValueError('Choose a specific IP address to scan')
-        rules = rows(con, 'SELECT * FROM scope_rules WHERE engagement_id=?', (eid,))
+        from .scope_rules import policy
+        rules, limited = policy(con, eid)
         detail = query.detail(con, asset)
         names = [r['value'] for r in detail['relationships'] if r['asset_kind']=='hostname']
         if any(in_rule(value, r['target']) for r in rules if r['action']=='exclude' for value in [asset['value'], *names]):
@@ -660,21 +797,16 @@ def scan_asset(eid: int, aid: int, request: Request):
         for job in rows(con, "SELECT id,targets FROM jobs WHERE engagement_id=? AND profile='nmap-services' AND status IN ('queued','running')", (eid,)):
             if asset['value'] in json.loads(job['targets']):
                 return {'id': job['id'], 'existing': True}
-        if not any(r['action']=='include' and r['target']==asset['value'] for r in rules):
-            rule = {'action':'include', 'target':asset['value'], 'reason':'Explore: scope + Nmap'}
-            con.execute('INSERT INTO scope_rules(engagement_id,action,target,reason) VALUES (?,?,?,?)', (eid, 'include', asset['value'], rule['reason']))
-            rules.append(rule)
-            audit(con, eid, actor['name'], 'scope.added', rule)
         owners = [aid] + [r['id'] for r in detail['relationships'] if r['asset_kind']=='hostname']
         observed = con.execute('''SELECT DISTINCT ep.port FROM endpoints ep JOIN observations ob ON ob.endpoint_id=ep.id
             JOIN records rr ON rr.id=ob.record_id JOIN imports ii ON ii.id=rr.import_id WHERE ii.active=1
             AND ep.protocol='tcp' AND ep.asset_id IN (''' + ','.join('?' for _ in owners) + ')', owners).fetchall()
         ports = sorted(set(map(int, DEFAULT_NMAP_PORTS.split(','))) | {r[0] for r in observed})
         config = {'ports': ','.join(map(str, ports)), 'geolocate': True, 'asset_id': aid}
-        plan = prepare('nmap-services', [asset['value']], config, rules)
+        plan = prepare('nmap-services', [asset['value']], config, rules, limit_to_included=limited)
         jid = con.execute('INSERT INTO jobs(engagement_id,profile,actor,command,targets,excluded,config,created_at) VALUES (?,?,?,?,?,?,?,?)',
             (eid, 'nmap-services', actor['name'], dump(plan['command']), dump(plan['targets']), '[]', dump(config), now())).lastrowid
-        exact = prepare('nmap-services', plan['targets'], config, rules, data_dir() / 'jobs' / str(jid))
+        exact = prepare('nmap-services', plan['targets'], config, rules, data_dir() / 'jobs' / str(jid), limited)
         con.execute('UPDATE jobs SET command=? WHERE id=?', (dump(exact['command']), jid))
         audit(con, eid, actor['name'], 'job.queued', {'id':jid, 'asset_id':aid, 'ports':ports, 'geolocate':True})
     return {'id':jid, 'existing':False}

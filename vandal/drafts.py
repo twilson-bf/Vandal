@@ -12,12 +12,12 @@ from .db import connect, dump, now, rows
 from .identity import identity
 from .jobs import DEFAULT_NMAP_PORTS, PROFILES, executable, scope_targets
 from .redact import command as redact_command
-from .scope_rules import matcher
+from .scope_rules import matcher, policy
 
 router = APIRouter(prefix='/api/e/{eid}/scan-drafts')
 
 
-def proposal(body, rules):
+def proposal(body, rules, limit_to_included=False):
     if not isinstance(body, dict):
         raise ValueError('Draft payload must be an object')
     profile = body.get('profile')
@@ -42,7 +42,7 @@ def proposal(body, rules):
                 warnings.append('Nmap profile requires an IP or hostname: ' + target)
         except ValueError as exc:
             warnings.append(f'{target}: {exc}')
-    _, excluded = scope_targets(normalized, rules)
+    _, excluded = scope_targets(normalized, rules, limit_to_included)
     if excluded:
         warnings.append(f'{len(excluded)} target(s) currently fail scope checks. Drafting does not change scope.')
     if len(targets) > (5000 if profile == 'gowitness-web' else 500):
@@ -89,7 +89,7 @@ def proposal(body, rules):
 
 
 def visible_ids(con, eid):
-    excluded = matcher([r[0] for r in con.execute("SELECT target FROM scope_rules WHERE engagement_id=? AND action='exclude'", (eid,))])
+    excluded = matcher([r[0] for r in con.execute("SELECT target FROM scope_rules WHERE engagement_id=? AND hidden=1", (eid,))])
     visible = {r[0] for r in con.execute('SELECT id FROM scan_drafts WHERE engagement_id=?', (eid,))}
     for r in con.execute('SELECT r.draft_id,r.payload FROM scan_draft_revisions r JOIN scan_drafts d ON d.id=r.draft_id WHERE d.engagement_id=?', (eid,)):
         for target in json.loads(r['payload'])['targets']:
@@ -118,7 +118,8 @@ def read_draft(con, eid, did):
 def preview(eid: int, request: Request, body: dict = Body(...)):
     auth.access(request, eid, True)
     with connect() as con:
-        return proposal(body, rows(con, 'SELECT * FROM scope_rules WHERE engagement_id=?', (eid,)))
+        rules, limited = policy(con, eid)
+        return proposal(body, rules, limited)
 
 
 @router.get('')
@@ -151,7 +152,8 @@ def save(eid: int, request: Request, body: dict = Body(...), did: int = 0):
         raise ValueError('Draft requires a title (150 characters max), command and notes (20,000 characters max each)')
     with connect() as con:
         con.execute('BEGIN IMMEDIATE')
-        plan = proposal(body.get('payload', {}), rows(con, 'SELECT * FROM scope_rules WHERE engagement_id=?', (eid,)))
+        rules, limited = policy(con, eid)
+        plan = proposal(body.get('payload', {}), rules, limited)
         if did:
             old = read_draft(con, eid, did)
             if body.get('base_revision') != old['revision']:

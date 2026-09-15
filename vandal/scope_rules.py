@@ -5,6 +5,17 @@ from urllib.parse import urlsplit
 from .identity import identity
 
 
+def policy(con, eid):
+    """Return the engagement's scan policy and its reusable tagged rules."""
+    row = con.execute('SELECT scope_mode FROM engagements WHERE id=?', (eid,)).fetchone()
+    mode = row['scope_mode'] if row and row['scope_mode'] in ('open', 'included') else 'open'
+    rules = [dict(r) for r in con.execute(
+        'SELECT id,engagement_id,action,target,tag,hidden FROM scope_rules WHERE engagement_id=? ORDER BY tag,target',
+        (eid,),
+    )]
+    return rules, mode == 'included'
+
+
 def parse_targets(text):
     if not isinstance(text, str) or len(text.encode()) > 1024 * 1024:
         raise ValueError('Scope input must be text up to 1 MiB')
@@ -68,11 +79,11 @@ def install_visibility(con, eid):
     in full so excluded identities cannot leak through banners or evidence links.
     Scope management uses the original tables, making exclusions reversible.
     """
-    targets = [r[0] for r in con.execute("SELECT target FROM main.scope_rules WHERE engagement_id=? AND action='exclude'", (eid,))]
+    targets = [r[0] for r in con.execute("SELECT target FROM main.scope_rules WHERE engagement_id=? AND hidden=1", (eid,))]
     if not targets:
         return
     matches = matcher(targets)
-    con.create_function('scope_excluded', 1, lambda value: int(matches(value)), deterministic=True)
+    con.create_function('scope_hidden', 1, lambda value: int(matches(value)), deterministic=True)
     con.execute('CREATE TEMP TABLE hidden_assets(id INTEGER PRIMARY KEY)')
     con.executemany('INSERT INTO hidden_assets VALUES (?)', [(r[0],) for r in con.execute('SELECT id,value FROM main.assets WHERE engagement_id=?', (eid,)) if matches(r[1])])
     con.execute('CREATE TEMP TABLE hidden_records(id INTEGER PRIMARY KEY)')
@@ -90,7 +101,7 @@ def install_visibility(con, eid):
         con.execute(f'CREATE TEMP VIEW {name} AS {sql}')
     job_cols = [r[1] for r in con.execute('PRAGMA main.table_info(jobs)')]
     job_select = ','.join("'[]' AS excluded" if c == 'excluded' else 'j.' + c for c in job_cols)
-    con.execute('CREATE TEMP VIEW jobs AS SELECT ' + job_select + ' FROM main.jobs j WHERE j.engagement_id != %d OR NOT EXISTS (SELECT 1 FROM json_each(j.targets) WHERE scope_excluded(value))' % int(eid))
+    con.execute('CREATE TEMP VIEW jobs AS SELECT ' + job_select + ' FROM main.jobs j WHERE j.engagement_id != %d OR NOT EXISTS (SELECT 1 FROM json_each(j.targets) WHERE scope_hidden(value))' % int(eid))
     # Keep mixed imports browsable, but never expose their original raw download or
     # command metadata. Counts describe visible records, not the hidden originals.
     cols = [r[1] for r in con.execute('PRAGMA main.table_info(imports)')]

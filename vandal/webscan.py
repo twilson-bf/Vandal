@@ -15,17 +15,18 @@ from .jobs import executable, scope_targets
 from .identity import identity
 from .web_inventory import validate_config
 from .web_proxy import ScopeProxy
+from .scope_rules import policy
 
 
 def load(folder):
     with connect() as con:
         job = dict(con.execute('SELECT * FROM jobs WHERE id=?',(int(folder.name),)).fetchone())
-        rules = [dict(r) for r in con.execute('SELECT * FROM scope_rules WHERE engagement_id=?',(job['engagement_id'],))]
-    return job,json.loads(job['config']),rules
+        rules, limited = policy(con, job['engagement_id'])
+    return job,json.loads(job['config']),rules,limited
 
 
 def validate(folder):
-    job,config,rules = load(folder)
+    job,config,rules,_ = load(folder)
     limits = validate_config(config)
     candidates = config['_web_candidates']
     def probe(c):
@@ -98,8 +99,8 @@ def persist(folder, job, proxy=None):
 
 
 def run(folder):
-    job,config,rules=load(folder)
-    if scope_targets(json.loads(job['targets']),rules)[0]!=json.loads(job['targets']): raise ValueError('Scope changed; create a new web scan')
+    job,config,rules,limited=load(folder)
+    if scope_targets(json.loads(job['targets']),rules,limited)[0]!=json.loads(job['targets']): raise ValueError('Scope changed; create a new web scan')
     limits=validate_config(config)
     proxy=ScopeProxy(config['_web_candidates'],[r['target'] for r in rules if r['action']=='exclude'],job['engagement_id'],folder/'resolution-log.jsonl')
     thread=threading.Thread(target=proxy.serve_forever,daemon=True);thread.start()

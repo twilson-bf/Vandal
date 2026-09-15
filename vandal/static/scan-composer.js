@@ -1,13 +1,14 @@
 /* Profile-specific scan controls; all options are validated again by the server. */
 jobComposer=async function(preferredProfile,context={}){
- const profiles=await api(endpoint('profiles'));
+ const [profiles,scopeGroups]=await Promise.all([api(endpoint('profiles')),api(endpoint('scope/groups'))]);
  const targetQuery=new URLSearchParams(selected.size?{ids:[...selected.keys()].join(',')}:{q:['explore','domains'].includes(page)?searchText():'',mode:page==='domains'?'hostname':params.mode||'auto'});
  if(page==='web'&&!selected.size){targetQuery.set('source','web');targetQuery.set('q',params.q||'');if(params.status)targetQuery.set('status',params.status);if(params.job_id)targetQuery.set('job_id',params.job_id)}
  const targetList=context.targets?{targets:context.targets,count:context.targets.length,source:'selection'}:await api(endpoint('scan-targets?'+targetQuery));
  const select=(name,label,items,value)=>`<label>${label}<select name="${name}">${items.map(([v,l])=>`<option value="${v}" ${v===value?'selected':''}>${l}</option>`).join('')}</select></label>`;
  const num=(name,label,value,min,max)=>`<label>${label}<input name="${name}" type="number" value="${value}" min="${min}" max="${max}" required></label>`;
  const check=(name,label)=>`<label class="checkbox"><input name="${name}" type="checkbox">${label}</label>`;
- drawer(`<div class="composer-heading"><div><span>PROCESS CONTROL // NEW</span><h2>New scan</h2></div><b>JOB / UNCOMMITTED</b></div><section class="composer-aperture"><div class="aperture-code">SCAN<br>CTRL</div><pre><i>target.buffer</i> = ${targetList.count}\n<i>source.mode</i>   = ${targetList.source==='selection'?'SELECTED':'FILTERED_SET'}\n<i>profile.state</i> = AWAITING_INPUT\n<i>execution</i>     = LOCKED_UNTIL_VALIDATED</pre></section><form id="scan-composer"><div class="form-grid">${select('profile','TOOL / PROFILE',profiles.map(p=>[p.id,p.name+(p.installed?'':' · not installed')]),'bbot-passive')}</div><p id="scan-description" class="micro"></p><label>TARGETS<textarea name="targets" required placeholder="Hostnames or IPs, one per line">${esc(targetList.targets.join('\n'))}</textarea></label><p class="micro">${targetList.count} targets from ${targetList.source==='selection'?'your selection':'all matching results, across every page'}. Edit the list to adjust this job.</p>${check('add_scope','Add entered targets to scope')}
+ const scopeOptions=scopeGroups.map(g=>`<option value="${esc(g.tag)}" ${g.action!=='include'||g.hidden?'disabled':''}>${esc(g.tag)} · ${g.rule_count} targets${g.action!=='include'?' · excluded':g.hidden?' · hidden':''}</option>`).join('');
+ drawer(`<div class="composer-heading"><div><span>PROCESS CONTROL // NEW</span><h2>New scan</h2></div><b>JOB / UNCOMMITTED</b></div><section class="composer-aperture"><div class="aperture-code">SCAN<br>CTRL</div><pre><i>target.buffer</i> = ${targetList.count}\n<i>source.mode</i>   = ${targetList.source==='selection'?'SELECTED':'FILTERED_SET'}\n<i>profile.state</i> = AWAITING_INPUT\n<i>execution</i>     = LOCKED_UNTIL_VALIDATED</pre></section><form id="scan-composer"><div class="form-grid">${select('profile','TOOL / PROFILE',profiles.map(p=>[p.id,p.name+(p.installed?'':' · not installed')]),'bbot-passive')}<label>TARGET SOURCE<select name="scope_group"><option value="">Current Explore selection</option>${scopeOptions}</select></label></div><p id="scan-description" class="micro"></p><label>TARGETS<textarea name="targets" required placeholder="Hostnames or IPs, one per line">${esc(targetList.targets.join('\n'))}</textarea></label><p class="micro" id="scan-target-source">${targetList.count} targets from ${targetList.source==='selection'?'your selection':'all matching results, across every page'}. Edit the list to adjust this job.</p>
  <fieldset data-scan-profile="nmap-services"><legend>Nmap / TCP</legend>
  ${select('preset','PRESET',[['light','Light service discovery'],['services','Detailed service discovery'],['vulns','Vulnerability review'],['custom','Custom']],'light')}
  <div class="form-grid">${select('port_mode','PORT SELECTION',[['custom','Custom ports'],['top','Most common ports'],['all','All TCP ports (1–65535)']],'custom')}<label data-port-mode="custom">PORTS<input name="ports" value="22,80,443,445,3389,8080,8443"></label><div data-port-mode="top">${num('top_ports','NUMBER OF TOP PORTS',1000,1,65535)}</div>
@@ -27,23 +28,23 @@ jobComposer=async function(preferredProfile,context={}){
  const form=$('#scan-composer'),f=form.elements;
  if(selected.size&&[...selected.values()].every(v=>/^[0-9.]+$/.test(v)||v.includes(':')))f.profile.value='nmap-services';
  if(preferredProfile&&profiles.some(p=>p.id===preferredProfile))f.profile.value=preferredProfile;
- if(context.draft){const saved=context.draft.payload;f.profile.value=saved.profile;f.add_scope.checked=saved.add_scope;f.preset.value='custom';for(const [key,value] of Object.entries(saved.config)){if(key==='modules'){for(const m of ['crt','hackertarget','rapiddns','shodan_idb'])f['source_'+m].checked=Array.isArray(value)&&value.includes(m)}else if(f[key]){if(f[key].type==='checkbox')f[key].checked=value;else f[key].value=value}}}
+ if(context.draft){const saved=context.draft.payload;f.profile.value=saved.profile;f.preset.value='custom';for(const [key,value] of Object.entries(saved.config)){if(key==='modules'){for(const m of ['crt','hackertarget','rapiddns','shodan_idb'])f['source_'+m].checked=Array.isArray(value)&&value.includes(m)}else if(f[key]){if(f[key].type==='checkbox')f[key].checked=value;else f[key].value=value}}}
  const update=()=>{for(const fieldset of form.querySelectorAll('[data-scan-profile]')){fieldset.hidden=fieldset.dataset.scanProfile!==f.profile.value;fieldset.disabled=fieldset.hidden}for(const el of form.querySelectorAll('[data-port-mode]')){el.hidden=el.dataset.portMode!==f.port_mode.value;for(const input of el.querySelectorAll('input'))input.disabled=el.hidden}$('#scan-description').textContent=profiles.find(p=>p.id===f.profile.value)?.description||''};
  update();
  let revision=0;
  const invalidate=()=>{form.captureDraft?.();form.captureDraft=null;revision++;$('#job-preview').innerHTML=''};
  form.oninput=invalidate;
- form.onchange=e=>{invalidate();if(e.target===f.preset&&f.preset.value!=='custom'){
+ form.onchange=async e=>{invalidate();if(e.target===f.scope_group&&f.scope_group.value){try{const group=await api(endpoint('scope/groups/'+encodeURIComponent(f.scope_group.value)+'/targets'));f.targets.value=group.targets.join('\n');$('#scan-target-source').textContent=`${group.count} targets from tagged group “${group.tag}”. Edit the list to adjust this job.`;invalidate()}catch(err){toast(err.message)}return}if(e.target===f.preset&&f.preset.value!=='custom'){
   const preset=f.preset.value;f.port_mode.value=preset==='light'?'custom':'top';f.service_detection.value=preset==='light'?'light':'standard';f.service_scripts.checked=preset!=='light';f.tls_checks.checked=preset==='vulns';f.safe_vulns.checked=preset==='vulns';f.vulners.checked=false;f.host_timeout.value=preset==='light'?180:900;
  }else if(e.target.closest('[data-scan-profile="nmap-services"]'))f.preset.value='custom';update()};
  let resumed=context.draft;
  form.onsubmit=async e=>{e.preventDefault();const token=++revision;$('#job-preview').innerHTML='Preparing draft…';try{
   const values=Object.fromEntries(new FormData(form));const config={};
-  for(const [key,value] of Object.entries(values))if(!key.startsWith('source_')&&!['profile','targets','add_scope','preset'].includes(key))config[key]=value;
+  for(const [key,value] of Object.entries(values))if(!key.startsWith('source_')&&!['profile','targets','scope_group','preset'].includes(key))config[key]=value;
   if(values.profile==='nmap-services')for(const key of ['service_scripts','tls_checks','safe_vulns','vulners'])config[key]=f[key].checked;
   if(values.profile==='bbot-passive')config.modules=['crt','hackertarget','rapiddns','shodan_idb'].filter(m=>f['source_'+m].checked);
   if(values.profile==='gowitness-web'){config.web_defaults=f.web_defaults.checked;config.full_page=f.full_page.checked;}
-  const body={profile:values.profile,targets:values.targets.split(/[\s,;]+/).filter(Boolean),config,add_scope:f.add_scope.checked};
+  const body={profile:values.profile,targets:values.targets.split(/[\s,;]+/).filter(Boolean),config,add_scope:false};
   await showScanDraft(form,body,resumed,()=>token===revision&&form.isConnected);resumed=null;
  }catch(err){if(token===revision&&form.isConnected)$('#job-preview').textContent=err.message}};
  if(context.draft){const token=++revision;await showScanDraft(form,context.draft.payload,resumed,()=>token===revision&&form.isConnected);resumed=null;}

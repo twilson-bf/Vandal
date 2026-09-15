@@ -51,7 +51,7 @@ def validate_config(config):
 
 
 def visible_captures(con,eid):
-    rules = rows(con,"SELECT * FROM scope_rules WHERE engagement_id=? AND action='exclude'",(eid,))
+    rules = rows(con,"SELECT * FROM scope_rules WHERE engagement_id=? AND hidden=1",(eid,))
     from .scope_rules import matcher
     excluded = matcher([r['target'] for r in rules])
     result = []
