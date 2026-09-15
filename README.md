@@ -131,6 +131,13 @@ The passive BBOT profile offers `crt`, `hackertarget`, `rapiddns`, and `shodan_i
 DNS resolution is enabled and automatic dependency installation is disabled.
 Unavailable upstream sources are visible in tool output; no account keys are required.
 
+The scan composer provides a reverse hostname validation profile for individual IP
+addresses. It queries PTR through selected Cloudflare, Google, and Quad9 resolvers,
+then checks A and AAAA through the same resolver. A returned hostname becomes a
+validated current mapping only when its forward answer contains the original IP.
+PTR-only names, forward mismatches, empty answers, failures, full DNS responses, and
+per-resolver results remain browsable as evidence.
+
 The scan composer provides light, detailed-service, and vulnerability-review Nmap
 presets. Tune custom/top/all TCP ports, version intensity, host discovery, IPv4/IPv6,
 timing, rate, retries, and host/script timeouts. Optional NSE bundles cover service

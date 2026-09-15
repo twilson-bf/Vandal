@@ -39,7 +39,7 @@ def execute(job):
             (folder / 'resolved-targets.jsonl').write_text('\n'.join(dump({'host': host, 'a': ips, 'resolver': 'system DNS at dispatch', 'timestamp': now()}) for host, ips in plan['resolutions'].items()) + '\n')
         if job['profile'] == 'httpx-web':
             validate_resolutions(plan['targets'], rules)
-        version_args = ['--version'] if job['profile'] in ('bbot-passive', 'nmap-services', 'dns-validate') else ['-version']
+        version_args = ['--version'] if job['profile'] in ('bbot-passive', 'nmap-services', 'dns-validate', 'reverse-dns') else ['-version']
         version_command = [executable('gowitness'), 'version'] if job['profile']=='gowitness-web' else [plan['command'][0], *version_args]
         version = subprocess.run(version_command, capture_output=True, text=True, timeout=20)
         with connect() as con:

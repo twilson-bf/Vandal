@@ -182,7 +182,7 @@ def json_record(result, obj, raw):
                 if value.get(key):
                     assets.append(value[key])
         result.add(kind.lower(), str(value)[:300], raw, obj, assets, links, ports, obj.get('timestamp'))
-    elif 'host' in obj and any(k in obj for k in ('a', 'aaaa', 'cname', 'rcode', 'status_code')):
+    elif 'host' in obj and any(k in obj for k in ('a', 'aaaa', 'cname', 'ptr', 'rcode', 'status_code')):
         host = obj['host']
         assets.append(host)
         for key in ('a', 'aaaa', 'cname'):
@@ -191,6 +191,17 @@ def json_record(result, obj, raw):
             for target in values:
                 assets.append(target)
                 links.append((host, target, 'aliases-to' if key == 'cname' else 'resolves-to'))
+        for hostname in obj.get('ptr') or []:
+            assets.append(hostname)
+            links.append((hostname, host, 'reverse-name'))
+        for validation in obj.get('forward') or []:
+            if not isinstance(validation, dict) or validation.get('status') != 'confirmed' or not validation.get('hostname'):
+                continue
+            hostname = validation['hostname']
+            assets.append(hostname)
+            for address in validation.get('addresses') or []:
+                assets.append(address)
+                links.append((hostname, address, 'resolves-to'))
         if obj.get('url'):
             assets.append(obj['url'])
             links.append((obj['url'], host, 'web-host'))
@@ -199,7 +210,10 @@ def json_record(result, obj, raw):
             u=urlsplit(obj['url'])
             if u.scheme in ('http','https'):
                 ports.append(dict(owner=host,port=u.port or (443 if u.scheme=='https' else 80),protocol='tcp',state='open',service=u.scheme,evidence='probed',product=str(obj.get('webserver',''))))
-        result.add('http' if 'status_code' in obj else 'dns', str(obj.get('url', host)), raw, obj, assets, links, ports=ports, observed=obj.get('timestamp'))
+        title = str(obj.get('url', host))
+        if obj.get('query_type') == 'PTR':
+            title = f'{host} · reverse DNS · {obj.get("status", obj.get("rcode", "unknown"))}'
+        result.add('http' if 'status_code' in obj else 'dns', title, raw, obj, assets, links, ports=ports, observed=obj.get('timestamp'))
     elif 'url' in obj:
         result.add('web', str(obj['url']), raw, obj, [obj['url']], observed=obj.get('timestamp'))
     elif 'host' in obj and 'port' in obj:

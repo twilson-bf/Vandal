@@ -110,7 +110,7 @@ class DraftTests(unittest.TestCase):
         self.assertEqual(len(self.client.get(self.base+'/scan-drafts').json()),1)
 
     def test_all_existing_profiles_can_be_drafted_without_tools_or_dns(self):
-        for profile in ('bbot-passive','dns-validate','nmap-services','httpx-web','gowitness-web'):
+        for profile in ('bbot-passive','dns-validate','reverse-dns','nmap-services','httpx-web','gowitness-web'):
             with patch('socket.getaddrinfo',side_effect=AssertionError('DNS called')),patch('vandal.drafts.executable',return_value=None):
                 response=self.client.post(self.base+'/scan-drafts/preview',json={**self.payload(),'profile':profile})
             self.assertEqual(response.status_code,200,(profile,response.text))

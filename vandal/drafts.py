@@ -38,6 +38,8 @@ def proposal(body, rules, limit_to_included=False):
                 normalized.append(value)
             if profile in ('bbot-passive', 'dns-validate') and kind != 'hostname':
                 warnings.append('Hostname required by this profile: ' + target)
+            elif profile == 'reverse-dns' and kind != 'ip':
+                warnings.append('Individual IP address required by this profile: ' + target)
             elif profile == 'nmap-services' and kind not in ('hostname', 'ip'):
                 warnings.append('Nmap profile requires an IP or hostname: ' + target)
         except ValueError as exc:
@@ -71,6 +73,12 @@ def proposal(body, rules, limit_to_included=False):
                 argv += ['-b', *exclusions]
         elif profile == 'dns-validate':
             argv = [sys.executable, '-m', 'vandal.probes', 'dns', inputs, str(folder / 'output.jsonl')]
+        elif profile == 'reverse-dns':
+            resolvers = config.get('resolvers', ['1.1.1.1', '8.8.8.8'])
+            allowed = ('1.1.1.1', '8.8.8.8', '9.9.9.9')
+            if not isinstance(resolvers, list) or not resolvers or any(r not in allowed for r in resolvers):
+                raise ValueError('Select at least one supported reverse DNS resolver')
+            argv = [sys.executable, '-m', 'vandal.probes', 'reverse', inputs, str(folder / 'output.jsonl'), '--resolvers', ','.join(dict.fromkeys(resolvers))]
         elif profile == 'gowitness-web':
             from .web_inventory import validate_config
             validate_config(config)

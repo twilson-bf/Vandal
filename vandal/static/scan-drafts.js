@@ -36,6 +36,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('a,button')
  if(t.hasAttribute('data-open-drafts')){e.preventDefault();await showSavedDrafts()}
  if(t.dataset.scanDraft){e.preventDefault();await openScanDraft(Number(t.dataset.scanDraft))}
  if(t.dataset.syncDns){e.preventDefault();await jobComposer('dns-validate',{targets:[t.dataset.syncDns]})}
+ if(t.dataset.reverseDns){e.preventDefault();await jobComposer('reverse-dns',{targets:[t.dataset.reverseDns]})}
  if(t.dataset.profileDraft){e.preventDefault();await jobComposer(t.dataset.profileDraft)}
 }catch(err){toast(err.message)}});
 const originalJobsView=renderers.jobs;

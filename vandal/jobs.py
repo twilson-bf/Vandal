@@ -15,6 +15,7 @@ PROFILES = {
     'gowitness-web': {'name':'Web inventory & screenshots', 'tool':'gowitness', 'description':'Validate HTTP/HTTPS on observed TCP ports, then capture responding URLs with gowitness.'},
     'bbot-passive': {'name': 'Subdomains + passive ports', 'tool': 'bbot', 'description': 'crt, hackertarget, rapiddns + Shodan InternetDB. DNS resolution enabled; ports are provider observations.'},
     'dns-validate': {'name': 'Independent DNS validation', 'tool': 'python', 'description': 'A / AAAA / CNAME answers from Cloudflare and Google, retained separately.'},
+    'reverse-dns': {'name': 'Reverse hostname validation', 'tool': 'python', 'description': 'PTR discovery followed by A / AAAA confirmation through independent resolvers.'},
     'nmap-services': {'name': 'Ports & services', 'tool': 'nmap', 'description': 'TCP ports, service versions and optional NSE checks for scoped IPs or hostnames.'},
     'httpx-web': {'name': 'HTTP inventory', 'tool': 'httpx', 'description': 'HTTP metadata and technology hints. No redirect following or automatic TLS-domain expansion.'},
 }
@@ -56,6 +57,8 @@ def prepare(profile, targets, config, rules, folder=None, limit_to_included=Fals
         raise ValueError('No targets remain after scope rules.' + suffix)
     if profile in ('bbot-passive', 'dns-validate') and any(identity(t)[0] != 'hostname' for t in accepted):
         raise ValueError('This profile requires hostnames')
+    if profile == 'reverse-dns' and any(identity(t)[0] != 'ip' for t in accepted):
+        raise ValueError('Reverse hostname validation requires individual IP addresses')
     if profile == 'httpx-web' and any(identity(t)[0] not in ('hostname', 'ip', 'url') for t in accepted):
         raise ValueError('HTTP inventory requires hostnames, IPs or HTTP(S) origins')
     tool = executable(PROFILES[profile]['tool'])
@@ -92,6 +95,12 @@ def prepare(profile, targets, config, rules, folder=None, limit_to_included=Fals
             argv.extend(['-b', *blacklist])
     elif profile == 'dns-validate':
         argv = [sys.executable, '-m', 'vandal.probes', 'dns', str(inputs), str(folder / 'output.jsonl')]
+    elif profile == 'reverse-dns':
+        resolvers = config.get('resolvers', ['1.1.1.1', '8.8.8.8'])
+        allowed = ('1.1.1.1', '8.8.8.8', '9.9.9.9')
+        if not isinstance(resolvers, list) or not resolvers or any(r not in allowed for r in resolvers):
+            raise ValueError('Select at least one supported reverse DNS resolver')
+        argv = [sys.executable, '-m', 'vandal.probes', 'reverse', str(inputs), str(folder / 'output.jsonl'), '--resolvers', ','.join(dict.fromkeys(resolvers))]
     else:
         from .nmap_options import number
         argv = [tool, '-l', str(inputs), '-json', '-o', str(folder / 'output.jsonl'), '-sc', '-title', '-td', '-ip', '-irh', '-rl', number(config,'rate',5,1,100), '-threads', number(config,'threads',5,1,50), '-timeout', number(config,'timeout',10,1,120), '-duc']

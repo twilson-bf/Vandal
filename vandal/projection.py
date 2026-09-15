@@ -50,14 +50,17 @@ def address_views(con, eid, assets):
         fields = unpack(r['fields'], {})
         forward = r['relation'] != 'reverse-name'
         validated = r['kind'] == 'dns' and fields.get('rcode') in ('NOERROR', 'NODATA', 0)
-        rank = 3 if validated else 2 if r['relation'] == 'scanner-association' else 1 if forward else 0
+        rank = 3 if validated and forward else 2 if r['relation'] == 'scanner-association' else 1 if forward else 0
         event = events[host['id']].setdefault(r['record_id'], {
             'record_id': r['record_id'], 'import_id': r['import_id'], 'at': r['observed_at'] or r['created_at'],
             'time_basis': 'observed' if r['observed_at'] else 'imported', 'rank': rank,
             'source': fields.get('resolver') or fields.get('module') or r['format'],
-            'status': 'validated' if validated else 'observed' if forward else 'reverse-name only',
+            'status': 'validated' if validated and forward else 'observed' if forward else 'reverse-name only',
             'ips': [], 'families': [], 'ttl': fields.get('ttl'), 'error': ''})
-        event['ips'].append({'id': ip['id'], 'value': ip['value']})
+        if rank > event['rank']:
+            event.update(rank=rank, status='validated' if validated else 'observed')
+        if not any(old['id'] == ip['id'] for old in event['ips']):
+            event['ips'].append({'id': ip['id'], 'value': ip['value']})
         family = ipaddress.ip_address(ip['value']).version
         if family not in event['families']:
             event['families'].append(family)
