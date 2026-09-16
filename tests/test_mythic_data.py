@@ -6,7 +6,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from vandal.db import connect, migrate, now
-from vandal.mythic import attach, authenticate, create_source, ingest, rematch_engagement
+from vandal.mythic import attach, authenticate, create_source, ingest, rematch_engagement, rotate_token
 
 
 class MythicDataTests(unittest.TestCase):
@@ -45,6 +45,15 @@ class MythicDataTests(unittest.TestCase):
             con.execute('UPDATE integration_sources SET active=0 WHERE id=?', (self.source_id,))
             with self.assertRaises(HTTPException):
                 authenticate(con, self.source_id, 'Bearer ' + self.token)
+
+    def test_rotated_token_replaces_previous_token(self):
+        with connect() as con:
+            source, replacement = rotate_token(con, self.source_id, self.eid)
+            self.assertEqual(source['operation_id'], 2)
+            self.assertNotEqual(replacement, self.token)
+            with self.assertRaises(HTTPException):
+                authenticate(con, self.source_id, 'Bearer ' + self.token)
+            self.assertEqual(authenticate(con, self.source_id, 'Bearer ' + replacement)['id'], self.source_id)
 
     def test_asset_created_after_callback_is_rematched(self):
         with connect() as con:

@@ -71,8 +71,17 @@ class MythicIntegrationTests(unittest.TestCase):
         self.assertTrue(marker['pwned'])
         self.assertEqual(marker['callback_count'], 1)
 
+        rotated = self.client.post(self.base + f"/integrations/mythic/{source['id']}/token")
+        self.assertEqual(rotated.status_code, 200, rotated.text)
+        replacement = rotated.json()
+        self.assertTrue(replacement['token'].startswith('vnd_mythic_'))
+        self.assertNotEqual(replacement['token'], source['token'])
+        self.assertEqual(replacement['operation_id'], 2)
+        self.assertEqual(self.client.post(ingest_url, headers={'Authorization': 'Bearer ' + source['token']}, json={'callbacks': []}).status_code, 401)
+        self.assertEqual(self.client.post(ingest_url, headers={'Authorization': 'Bearer ' + replacement['token']}, json={'callbacks': [callback]}).status_code, 200)
+
         self.client.delete(self.base + f"/integrations/mythic/{source['id']}")
-        denied = self.client.post(ingest_url, headers={'Authorization': 'Bearer ' + source['token']}, json={'callbacks': []})
+        denied = self.client.post(ingest_url, headers={'Authorization': 'Bearer ' + replacement['token']}, json={'callbacks': []})
         self.assertEqual(denied.status_code, 401)
         self.assertTrue(self.client.get(self.base + f"/hosts/{host['id']}").json()['pwned'])
 

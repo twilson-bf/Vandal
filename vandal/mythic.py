@@ -12,6 +12,11 @@ from .db import dump, now, rows
 from .identity import identity
 
 
+def issue_token():
+    token = 'vnd_mythic_' + secrets.token_urlsafe(32)
+    return token, hashlib.sha256(token.encode()).hexdigest()
+
+
 def origin(value):
     value = str(value or '').strip().rstrip('/')
     parsed = urlsplit(value)
@@ -31,14 +36,25 @@ def create_source(con, engagement_id, name, public_url, operation_id):
         raise ValueError('Mythic operation ID must be a positive integer')
     if operation_id < 1:
         raise ValueError('Mythic operation ID must be a positive integer')
-    secret = secrets.token_urlsafe(32)
-    token = 'vnd_mythic_' + secret
+    token, token_hash = issue_token()
     source_id = con.execute(
         '''INSERT INTO integration_sources(engagement_id,kind,name,token_hash,public_url,operation_id,created_at)
            VALUES (?,'mythic',?,?,?,?,?)''',
-        (engagement_id, name, hashlib.sha256(token.encode()).hexdigest(), public_url, operation_id, now()),
+        (engagement_id, name, token_hash, public_url, operation_id, now()),
     ).lastrowid
     return source_id, token
+
+
+def rotate_token(con, source_id, engagement_id):
+    source = con.execute(
+        "SELECT id,name,operation_id FROM integration_sources WHERE id=? AND engagement_id=? AND kind='mythic' AND active=1",
+        (source_id, engagement_id),
+    ).fetchone()
+    if not source:
+        raise HTTPException(404, 'Active integration not found')
+    token, token_hash = issue_token()
+    con.execute('UPDATE integration_sources SET token_hash=? WHERE id=?', (token_hash, source_id))
+    return dict(source), token
 
 
 def authenticate(con, source_id, authorization):

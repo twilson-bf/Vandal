@@ -203,6 +203,21 @@ def revoke_mythic_integration(eid: int, source_id: int, request: Request):
     return {'ok': True}
 
 
+@app.post('/api/e/{eid}/integrations/mythic/{source_id}/token')
+def rotate_mythic_integration_token(eid: int, source_id: int, request: Request):
+    actor = auth.access(request, eid, True)
+    from .mythic import rotate_token
+    with connect() as con:
+        source, token = rotate_token(con, source_id, eid)
+        audit(con, eid, actor['name'], 'integration.token_rotated', {'id': source_id, 'name': source['name']})
+    return {
+        'id': source_id,
+        'operation_id': source['operation_id'],
+        'token': token,
+        'message': 'Copy or export this token now. Vandal stores only its hash.',
+    }
+
+
 @app.post('/api/integrations/mythic/{source_id}/callbacks')
 def receive_mythic_callbacks(source_id: int, request: Request, body: dict = Body(...)):
     from .mythic import authenticate, ingest
