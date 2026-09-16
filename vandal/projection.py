@@ -233,6 +233,8 @@ def build(con, eid, hide_passive=False):
             primary = byid[a['address_view']['addresses'][0]['id']]
             for key in ('country', 'city', 'latitude', 'longitude', 'geo_source', 'provider', 'asn'):
                 a[key] = primary.get(key)
+    from .mythic import attach as attach_mythic_callbacks
+    attach_mythic_callbacks(con, eid, assets)
     return assets
 
 

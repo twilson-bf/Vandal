@@ -10,13 +10,13 @@ window.VandalMap=(()=>{
    const lat=Number(p.latitude),lng=Number(p.longitude),v=globe.getCoords(lat,lng,.015);
    if(camera.x*v.x+camera.y*v.y+camera.z*v.z<=v.x*v.x+v.y*v.y+v.z*v.z)continue;
    const xy=globe.getScreenCoords(lat,lng,.015);
-   const confirmed=Boolean(p.confirmed);
-   let node=clusters.find(c=>c.confirmed===confirmed&&Math.hypot(c.x-xy.x,c.y-xy.y)<44);
-   if(!node){node={lat,lng,x:xy.x,y:xy.y,confirmed,hosts:[]};clusters.push(node)}
+   const confirmed=Boolean(p.confirmed),pwned=Boolean(p.pwned),state=pwned?'pwned':confirmed?'confirmed':'host';
+   let node=clusters.find(c=>c.state===state&&Math.hypot(c.x-xy.x,c.y-xy.y)<44);
+   if(!node){node={lat,lng,x:xy.x,y:xy.y,confirmed,pwned,state,hosts:[]};clusters.push(node)}
    node.hosts.push(p);
   }
-  for(const node of clusters)node.offset=clusters.some(c=>c!==node&&c.confirmed!==node.confirmed&&Math.hypot(c.x-node.x,c.y-node.y)<32)?(node.confirmed?-18:18):0;
-  const key=JSON.stringify(clusters.map(c=>[c.lat,c.lng,c.confirmed,c.offset,c.hosts.map(p=>[p.id,p.country,p.hostnames,p.confirmed])]));
+  for(const node of clusters)node.offset=clusters.some(c=>c!==node&&c.state!==node.state&&Math.hypot(c.x-node.x,c.y-node.y)<32)?(node.pwned?-20:node.confirmed?0:20):0;
+  const key=JSON.stringify(clusters.map(c=>[c.lat,c.lng,c.state,c.offset,c.hosts.map(p=>[p.id,p.country,p.hostnames,p.confirmed,p.pwned,p.callback_count])]));
   if(key!==clusterKey){clusterKey=key;globe.htmlElementsData(clusters)}
  }
  function scheduleClusters(){if(!clusterFrame)clusterFrame=requestAnimationFrame(updateClusters)}
@@ -35,10 +35,10 @@ window.VandalMap=(()=>{
   const view=globe.pointOfView();
   globe.pointOfView({...view,altitude:Math.max(.35,Math.min(5,view.altitude*Math.exp(Math.max(-1,Math.min(1,delta*.0015)))))},0);
  }
- function marker(node){const button=document.createElement('button');button.className='globe-marker'+(node.confirmed?' confirmed':'');button.style.pointerEvents='auto';button.style.marginLeft=(node.offset||0)+'px';button.textContent=node.hosts.length>1?node.hosts.length:node.confirmed?'!':'◎';button.title=node.hosts.length+' host(s)'+(node.confirmed?' · Confirmed vulnerabilities':' · No confirmed vulnerabilities')+' · '+[...new Set(node.hosts.map(h=>h.country))].join(' · ');button.setAttribute('aria-label','View '+button.title);button.onclick=e=>{e.stopPropagation();showGroup(node)};return button}
+ function marker(node){const button=document.createElement('button');button.className='globe-marker'+(node.pwned?' pwned':node.confirmed?' confirmed':'');button.style.pointerEvents='auto';button.style.marginLeft=(node.offset||0)+'px';button.textContent=node.hosts.length>1?node.hosts.length:node.pwned?'◆':node.confirmed?'!':'◎';button.title=node.hosts.length+' host(s)'+(node.pwned?' · Mythic beacon observed':node.confirmed?' · Confirmed vulnerabilities':' · No confirmed vulnerabilities')+' · '+[...new Set(node.hosts.map(h=>h.country))].join(' · ');button.setAttribute('aria-label','View '+button.title);button.onclick=e=>{e.stopPropagation();showGroup(node)};return button}
  function stopGlobe(){cancelAnimationFrame(clusterFrame);clusterFrame=0;clusterKey='';if(globe)globe.controls().removeEventListener('change',scheduleClusters);resize?.disconnect();visible?.disconnect();resize=visible=null;if(globe){globe.pauseAnimation();globe._destructor?.();globe=null}}
  function destroy(){epoch++;stopGlobe();container=null}
- async function flatMap(){await world('#vandal-flat-map',points);for(const p of points){const dot=container?.querySelector(`circle[data-asset="${p.id}"]`);if(dot&&p.confirmed){dot.setAttribute('fill','#ff4055');dot.querySelector('title').textContent+=' · Confirmed vulnerabilities'}}}
+ async function flatMap(){await world('#vandal-flat-map',points);for(const p of points){const dot=container?.querySelector(`circle[data-asset="${p.id}"]`);if(dot&&p.pwned){dot.setAttribute('fill','#caff00');dot.querySelector('title').textContent+=' · Mythic beacon observed'}else if(dot&&p.confirmed){dot.setAttribute('fill','#ff4055');dot.querySelector('title').textContent+=' · Confirmed vulnerabilities'}}}
  async function mount(){const token=++epoch;stopGlobe();const stage=container.querySelector('.globe-stage');stage.innerHTML='';
   if(flat){stage.innerHTML='<div id="vandal-flat-map" class="map-box" style="height:100%"></div>';await flatMap();return}
   try{
@@ -63,7 +63,7 @@ window.VandalMap=(()=>{
   container.onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-map-toggle')){flat=!flat;b.textContent=flat?'3D globe':'Flat map';mount()}if(b.dataset.mapZoom&&globe){const view=globe.pointOfView();globe.pointOfView({...view,altitude:Math.max(.35,Math.min(5,view.altitude*(b.dataset.mapZoom==='in'?.8:1.25)))},250)}if(b.hasAttribute('data-map-reset')&&globe)globe.pointOfView({lat:25,lng:10,altitude:2.2},350);if(b.hasAttribute('data-map-expand')){container.classList.toggle('expanded');b.textContent=container.classList.contains('expanded')?'Collapse':'Expand'}};
   updateStatus();await mount();
  }
- function updateStatus(){if(!container)return;const known=points.filter(p=>p.latitude!=null&&p.longitude!=null).length;container.querySelector('.globe-status').textContent=`${known} located · ${points.length-known} unknown · Red: confirmed vulnerabilities · Orange: other hosts · Scroll to zoom`}
+ function updateStatus(){if(!container)return;const known=points.filter(p=>p.latitude!=null&&p.longitude!=null).length;container.querySelector('.globe-status').textContent=`${known} located · ${points.length-known} unknown · Lime: Mythic beacon · Red: confirmed vulnerabilities · Orange: other hosts · Scroll to zoom`}
  document.addEventListener('visibilitychange',()=>{if(globe){if(document.hidden)globe.pauseAnimation();else globe.resumeAnimation()}});
  return {render,destroy};
 })();

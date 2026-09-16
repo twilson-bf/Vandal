@@ -23,7 +23,7 @@ def tokens(text):
         if key not in KEYS | {'text'}: raise ValueError(f'Unknown search filter: {key}')
         if not value: raise ValueError(f'Missing value for {key}')
         if key=='port' and (not value.isdigit() or not 1<=int(value)<=65535): raise ValueError('port requires a number from 1 to 65535')
-        choices={'has':{'ports','vuln'},'scanned':{'true','false'},'scope':{'included','excluded','unassigned'},'coverage':{'scanned','active','passive','unscanned'}}
+        choices={'has':{'ports','vuln','pwned'},'scanned':{'true','false'},'scope':{'included','excluded','unassigned'},'coverage':{'scanned','active','passive','unscanned'}}
         if key in choices and value not in choices[key]: raise ValueError(f'{key} accepts: '+', '.join(sorted(choices[key])))
         if key in ('ip','net'):
             try: ipaddress.ip_network(value,strict=False)
@@ -112,7 +112,7 @@ def matches(a,terms):
         if k in ('port','product','service'):found=any(observation(o,t) for o in allobs)
         elif k=='hostname':found=any(n==v or n.endswith('.'+v.removeprefix('*.')) for n in names)
         elif k in ('ip','net'):found=any(ipaddress.ip_address(ip) in ipaddress.ip_network(v,strict=False) for ip in ips)
-        elif k=='has':found=any(s['state']=='open' for s in a['services']) if v=='ports' else bool(a['potential'] or a['confirmed'])
+        elif k=='has':found=any(s['state']=='open' for s in a['services']) if v=='ports' else bool(a.get('pwned')) if v=='pwned' else bool(a['potential'] or a['confirmed'])
         elif k=='scanned':found=(a['coverage']=='scanned')==(v=='true')
         elif k in ('scope','coverage'):found=a[k]==v
         elif k=='scope_tag':found=any(tag.lower()==v for tag in a.get('scope_tags',[]))

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import sqlite3
 import subprocess
 import sys
 import time
@@ -161,6 +162,55 @@ def new_engagement(request: Request, body: dict = Body(...)):
         eid = con.execute('INSERT INTO engagements(name,created_at) VALUES (?,?)', (name, now())).lastrowid
         audit(con, eid, actor['name'], 'engagement.created', {'name': name})
     return {'id': eid}
+
+
+@app.get('/api/e/{eid}/integrations/mythic')
+def mythic_integrations(eid: int, request: Request):
+    auth.access(request, eid)
+    with connect() as con:
+        return rows(con, '''SELECT s.id,s.name,s.public_url,s.operation_id,s.active,s.created_at,s.last_sync_at,
+            count(DISTINCT c.id) callback_count,
+            count(DISTINCT l.asset_id) matched_assets
+            FROM integration_sources s
+            LEFT JOIN mythic_callbacks c ON c.source_id=s.id
+            LEFT JOIN mythic_callback_assets l ON l.callback_id=c.id
+            WHERE s.engagement_id=? AND s.kind='mythic'
+            GROUP BY s.id ORDER BY s.id''', (eid,))
+
+
+@app.post('/api/e/{eid}/integrations/mythic')
+def create_mythic_integration(eid: int, request: Request, body: dict = Body(...)):
+    actor = auth.access(request, eid, True)
+    from .mythic import create_source
+    with connect() as con:
+        try:
+            source_id, token = create_source(con, eid, body.get('name'), body.get('public_url'), body.get('operation_id'))
+        except sqlite3.IntegrityError:
+            raise ValueError('An integration with this name already exists')
+        audit(con, eid, actor['name'], 'integration.created', {'id': source_id, 'kind': 'mythic', 'name': body.get('name')})
+    return {'id': source_id, 'token': token, 'message': 'Copy this token now. Vandal stores only its hash.'}
+
+
+@app.delete('/api/e/{eid}/integrations/mythic/{source_id}')
+def revoke_mythic_integration(eid: int, source_id: int, request: Request):
+    actor = auth.access(request, eid, True)
+    with connect() as con:
+        source = con.execute("SELECT id,name FROM integration_sources WHERE id=? AND engagement_id=? AND kind='mythic'", (source_id, eid)).fetchone()
+        if not source:
+            raise HTTPException(404, 'Integration not found')
+        con.execute('UPDATE integration_sources SET active=0 WHERE id=?', (source_id,))
+        audit(con, eid, actor['name'], 'integration.revoked', {'id': source_id, 'name': source['name']})
+    return {'ok': True}
+
+
+@app.post('/api/integrations/mythic/{source_id}/callbacks')
+def receive_mythic_callbacks(source_id: int, request: Request, body: dict = Body(...)):
+    from .mythic import authenticate, ingest
+    with connect() as con:
+        source = authenticate(con, source_id, request.headers.get('Authorization', ''))
+        result = ingest(con, source, body)
+        audit(con, source['engagement_id'], 'integration:' + source['name'], 'integration.synced', result)
+        return result
 
 
 @app.get('/api/e/{eid}/overview')
@@ -369,7 +419,7 @@ def dashboard(eid: int, request: Request):
             findings=[{**g['claims'][0],'title':g['cve']+' · '+a['value'],'confirmed':int(g['confirmed'])} for a in display_hosts for g in a['vulnerabilities']]+[f for a in display_hosts for f in a['other_findings']]
         jobs = rows(con,'SELECT * FROM jobs WHERE engagement_id=? ORDER BY id DESC',(eid,))
         return {'hosts':len(display_hosts),'addresses':len(hosts),'hostnames':sum(a['kind']=='hostname' for a in assets),
-            'locations':[{'id':a['id'],'value':a['value'],'country':a['country'],'latitude':a['latitude'],'longitude':a['longitude'],'confirmed':a['map_confirmed'],'hostnames':[{'id':n['id'],'value':n['value']} for n in a['associated'] if n['kind']=='hostname']} for a in hosts],
+            'locations':[{'id':a['id'],'value':a['value'],'country':a['country'],'latitude':a['latitude'],'longitude':a['longitude'],'confirmed':a['map_confirmed'],'pwned':a.get('pwned',False),'callback_count':a.get('callback_count',0),'hostnames':[{'id':n['id'],'value':n['value']} for n in a['associated'] if n['kind']=='hostname']} for a in hosts],
             'new_services':sorted([{'id':a['id'],'value':a['value'],'port':s['port'],'protocol':s['protocol'],
                 'first_seen':min(o['created_at'] for o in s['_observations'])} for a in display_hosts for s in a['services'] if not projected or s['state']=='open'],key=lambda s:s['first_seen'],reverse=True)[:6],
             'services':sum(sum(s['state']=='open' for s in a['services']) if projected else len(a['services']) for a in display_hosts),'coverage':Counter(a['coverage'] for a in display_hosts),

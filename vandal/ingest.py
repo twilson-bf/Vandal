@@ -92,6 +92,8 @@ def ingest(import_id):
                 shodan_interests(con, item['engagement_id'], rid, record['fields'])
             con.execute('UPDATE imports SET format=?,status=?,warnings=?,metadata=?,record_count=?,finished_at=? WHERE id=?',
                         (parsed.format, 'partial' if parsed.partial else 'completed', dump(parsed.warnings), dump(parsed.metadata), len(parsed.records), now(), import_id))
+            from .mythic import rematch_engagement
+            rematch_engagement(con, item['engagement_id'])
     except Exception as exc:
         with connect() as con:
             con.execute("UPDATE imports SET status='failed',warnings=?,finished_at=? WHERE id=?", (dump([f'{type(exc).__name__}: {exc}']), now(), import_id))
