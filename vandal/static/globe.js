@@ -1,23 +1,41 @@
 /* Adapted from LotusPetal coverage-globe.js; same local globe.gl renderer. */
 window.VandalMap=(()=>{
- let globe=null,container=null,resize=null,visible=null,points=[],flat=false,epoch=0,clusterFrame=0,clusterKey='';
+ const SVG_NS='http://www.w3.org/2000/svg';
+ const LANDMARK_PATHS=[
+  'M12 6C15.3137 6 18 8.68629 18 12C18 15.3137 15.3137 18 12 18C8.68629 18 6 15.3137 6 12C6 8.68629 8.68629 6 12 6ZM12 8C9.79086 8 8 9.79086 8 12C8 14.2091 9.79086 16 12 16C14.2091 16 16 14.2091 16 12C16 9.79086 14.2091 8 12 8Z',
+  'M12 1C18.0751 1 23 5.92487 23 12C23 18.0751 18.0751 23 12 23C5.92487 23 1 18.0751 1 12C1 5.92487 5.92487 1 12 1ZM12 3C7.02944 3 3 7.02944 3 12C3 16.9706 7.02944 21 12 21C16.9706 21 21 16.9706 21 12C21 7.02944 16.9706 3 12 3Z'
+ ];
+ const DITHER='repeating-conic-gradient(#000 0% 25%, transparent 0% 50%)';
+ let globe=null,container=null,overlay=null,markerNodes=[],resize=null,visible=null,points=[],flat=false,epoch=0,clusterFrame=0,clusterKey='';
+ function landmark(size=24){
+  const svg=document.createElementNS(SVG_NS,'svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('width',size);svg.setAttribute('height',size);svg.setAttribute('aria-hidden','true');
+  for(const d of LANDMARK_PATHS){const path=document.createElementNS(SVG_NS,'path');path.setAttribute('d',d);path.setAttribute('fill','currentColor');svg.appendChild(path)}
+  return svg
+ }
  // Cluster in screen pixels so separation follows both zoom and viewport size.
  function updateClusters(){
-  clusterFrame=0;if(!globe)return;
-  const camera=globe.camera().position,clusters=[];
+  clusterFrame=0;if(!globe||!overlay)return;
+  const camera=globe.camera(),cam=camera.position,camLength=Math.hypot(cam.x,cam.y,cam.z)||1,clusters=[];
   for(const p of points){
    if(p.latitude==null||p.longitude==null)continue;
-   const lat=Number(p.latitude),lng=Number(p.longitude),v=globe.getCoords(lat,lng,.015);
-   if(camera.x*v.x+camera.y*v.y+camera.z*v.z<=v.x*v.x+v.y*v.y+v.z*v.z)continue;
-   const xy=globe.getScreenCoords(lat,lng,.015);
+   const lat=Number(p.latitude),lng=Number(p.longitude),v=globe.getCoords(lat,lng,0),vLength=Math.hypot(v.x,v.y,v.z)||1;
+   const dot=(cam.x*v.x+cam.y*v.y+cam.z*v.z)/(camLength*vLength),side=dot<-.04?'rear':'front';
+   const xy=globe.getScreenCoords(lat,lng,0);
    const confirmed=Boolean(p.confirmed),pwned=Boolean(p.pwned),state=pwned?'pwned':confirmed?'confirmed':'host';
-   let node=clusters.find(c=>c.state===state&&Math.hypot(c.x-xy.x,c.y-xy.y)<44);
-   if(!node){node={lat,lng,x:xy.x,y:xy.y,confirmed,pwned,state,hosts:[]};clusters.push(node)}
+   let node=clusters.find(c=>c.state===state&&c.side===side&&Math.hypot(c.x-xy.x,c.y-xy.y)<44);
+   if(!node){node={lat,lng,x:xy.x,y:xy.y,dot,side,confirmed,pwned,state,hosts:[]};clusters.push(node)}
    node.hosts.push(p);
   }
-  for(const node of clusters)node.offset=clusters.some(c=>c!==node&&c.state!==node.state&&Math.hypot(c.x-node.x,c.y-node.y)<32)?(node.pwned?-20:node.confirmed?0:20):0;
-  const key=JSON.stringify(clusters.map(c=>[c.lat,c.lng,c.state,c.offset,c.hosts.map(p=>[p.id,p.country,p.hostnames,p.confirmed,p.pwned,p.callback_count])]));
-  if(key!==clusterKey){clusterKey=key;globe.htmlElementsData(clusters)}
+  for(const node of clusters)node.offset=clusters.some(c=>c!==node&&c.side===node.side&&c.state!==node.state&&Math.hypot(c.x-node.x,c.y-node.y)<32)?(node.pwned?-20:node.confirmed?0:20):0;
+  const key=JSON.stringify(clusters.map(c=>[c.lat,c.lng,c.state,c.side,c.offset,c.hosts.map(p=>[p.id,p.country,p.hostnames,p.confirmed,p.pwned,p.callback_count])]));
+  if(key!==clusterKey){clusterKey=key;overlay.replaceChildren();markerNodes=clusters.map(node=>{const el=marker(node);overlay.appendChild(el);return el})}
+  clusters.forEach((node,index)=>{
+   const el=markerNodes[index];if(!el)return;
+   el.style.transform=`translate(${node.x+(node.offset||0)}px,${node.y}px) translate(-50%,-50%)`;
+   if(node.dot>.08){el.style.opacity='1';el.style.filter=`drop-shadow(0 0 7px ${node.pwned||node.confirmed?'#ff4055':'#ff8a24'})`;el.style.webkitMaskImage='none';el.style.maskImage='none'}
+   else if(node.dot<-.04){const depth=Math.min(1,(-node.dot-.04)*1.4),tile=Math.round(2+depth*8);el.style.opacity='1';el.style.filter=`drop-shadow(0 0 3px ${node.pwned||node.confirmed?'#ff405599':'#ff8a2499'})`;el.style.webkitMaskImage=DITHER;el.style.maskImage=DITHER;el.style.webkitMaskSize=`${tile}px ${tile}px`;el.style.maskSize=`${tile}px ${tile}px`}
+   else{el.style.opacity='1';el.style.filter='none';el.style.webkitMaskImage='none';el.style.maskImage='none'}
+  })
  }
  function scheduleClusters(){if(!clusterFrame)clusterFrame=requestAnimationFrame(updateClusters)}
  function graticule(){const lines=[];for(let lat=-75;lat<=75;lat+=15){const pts=[];for(let lng=-180;lng<=180;lng+=3)pts.push([lng,lat]);lines.push({pts})}for(let lng=-180;lng<180;lng+=15){const pts=[];for(let lat=-87;lat<=87;lat+=3)pts.push([lng,lat]);lines.push({pts})}return lines}
@@ -35,10 +53,10 @@ window.VandalMap=(()=>{
   const view=globe.pointOfView();
   globe.pointOfView({...view,altitude:Math.max(.35,Math.min(5,view.altitude*Math.exp(Math.max(-1,Math.min(1,delta*.0015)))))},0);
  }
- function marker(node){const button=document.createElement('button');button.className='globe-marker'+(node.pwned?' pwned':node.confirmed?' confirmed':'');button.style.pointerEvents='auto';button.style.marginLeft=(node.offset||0)+'px';button.textContent=node.hosts.length>1?node.hosts.length:node.pwned?'◆':node.confirmed?'!':'◎';button.title=node.hosts.length+' host(s)'+(node.pwned?' · Mythic beacon observed':node.confirmed?' · Confirmed vulnerabilities':' · No confirmed vulnerabilities')+' · '+[...new Set(node.hosts.map(h=>h.country))].join(' · ');button.setAttribute('aria-label','View '+button.title);button.onclick=e=>{e.stopPropagation();showGroup(node)};return button}
- function stopGlobe(){cancelAnimationFrame(clusterFrame);clusterFrame=0;clusterKey='';if(globe)globe.controls().removeEventListener('change',scheduleClusters);resize?.disconnect();visible?.disconnect();resize=visible=null;if(globe){globe.pauseAnimation();globe._destructor?.();globe=null}}
+ function marker(node){const button=document.createElement('button');button.type='button';button.className='globe-marker'+(node.pwned?' pwned':node.confirmed?' confirmed':'');button.style.pointerEvents='auto';button.appendChild(landmark(Math.min(36,24+node.hosts.length*2)));if(node.hosts.length>1){const count=document.createElement('span');count.className='globe-marker-count';count.textContent=node.hosts.length;button.appendChild(count)}button.title=node.hosts.length+' host(s)'+(node.pwned?' · Mythic beacon observed':node.confirmed?' · Confirmed vulnerabilities':' · No confirmed vulnerabilities')+' · '+[...new Set(node.hosts.map(h=>h.country))].join(' · ');button.setAttribute('aria-label','View '+button.title);button.onclick=e=>{e.stopPropagation();showGroup(node)};return button}
+ function stopGlobe(){cancelAnimationFrame(clusterFrame);clusterFrame=0;clusterKey='';markerNodes=[];overlay?.remove();overlay=null;if(globe)globe.controls().removeEventListener('change',scheduleClusters);resize?.disconnect();visible?.disconnect();resize=visible=null;if(globe){globe.pauseAnimation();globe._destructor?.();globe=null}}
  function destroy(){epoch++;stopGlobe();container=null}
- async function flatMap(){await world('#vandal-flat-map',points);for(const p of points){const dot=container?.querySelector(`circle[data-asset="${p.id}"]`);if(dot&&p.pwned){dot.setAttribute('fill','#caff00');dot.querySelector('title').textContent+=' · Mythic beacon observed'}else if(dot&&p.confirmed){dot.setAttribute('fill','#ff4055');dot.querySelector('title').textContent+=' · Confirmed vulnerabilities'}}}
+ async function flatMap(){await world('#vandal-flat-map',points);for(const p of points){const dot=container?.querySelector(`circle[data-asset="${p.id}"]`);if(!dot)continue;const color=p.pwned||p.confirmed?'#ff4055':'#ff8a24',group=document.createElementNS(SVG_NS,'g');group.setAttribute('class','flat-landmark');group.setAttribute('color',color);group.setAttribute('transform',`translate(${Number(dot.getAttribute('cx'))-12} ${Number(dot.getAttribute('cy'))-12})`);group.style.pointerEvents='none';for(const d of LANDMARK_PATHS){const path=document.createElementNS(SVG_NS,'path');path.setAttribute('d',d);path.setAttribute('fill','currentColor');group.appendChild(path)}dot.setAttribute('r','12');dot.setAttribute('fill','transparent');dot.parentNode.appendChild(group);if(p.pwned)dot.querySelector('title').textContent+=' · Mythic beacon observed';else if(p.confirmed)dot.querySelector('title').textContent+=' · Confirmed vulnerabilities'}}
  async function mount(){const token=++epoch;stopGlobe();const stage=container.querySelector('.globe-stage');stage.innerHTML='';
   if(flat){stage.innerHTML='<div id="vandal-flat-map" class="map-box" style="height:100%"></div>';await flatMap();return}
   try{
@@ -46,8 +64,8 @@ window.VandalMap=(()=>{
    globe=new Globe(stage).width(stage.clientWidth).height(stage.clientHeight).backgroundColor('#101014').globeImageUrl(null).showAtmosphere(false)
     .polygonsData(topojson.feature(topology,topology.objects.countries).features).polygonCapColor(()=> '#1A5FFF').polygonSideColor(()=> 'rgba(0,0,0,0)').polygonStrokeColor(()=> '#000000').polygonAltitude(.003)
     .pathsData(graticule()).pathPoints('pts').pathPointLat(p=>p[1]).pathPointLng(p=>p[0]).pathColor(()=> '#1A5FFF').pathStroke(.5).pathDashLength(1).pathDashGap(0).pathTransitionDuration(0)
-    .htmlElementsData([]).htmlLat('lat').htmlLng('lng').htmlAltitude(.015).htmlElement(marker)
     .onGlobeReady(()=>{if(!globe)return;const material=globe.globeMaterial();material.color.set('#000000');material.specular?.setRGB(0,0,0);material.shininess=0});
+   overlay=document.createElement('div');overlay.className='globe-icon-overlay';stage.appendChild(overlay);
    const controls=globe.controls();controls.autoRotate=false;controls.enableDamping=true;controls.enableZoom=false;controls.addEventListener('change',scheduleClusters);
    globe.pointOfView({lat:25,lng:10,altitude:2.2},0);scheduleClusters();
    resize=new ResizeObserver(()=>{if(globe){globe.width(stage.clientWidth).height(stage.clientHeight);scheduleClusters()}});resize.observe(stage);
@@ -63,7 +81,7 @@ window.VandalMap=(()=>{
   container.onclick=e=>{const b=e.target.closest('button');if(!b)return;if(b.hasAttribute('data-map-toggle')){flat=!flat;b.textContent=flat?'3D globe':'Flat map';mount()}if(b.dataset.mapZoom&&globe){const view=globe.pointOfView();globe.pointOfView({...view,altitude:Math.max(.35,Math.min(5,view.altitude*(b.dataset.mapZoom==='in'?.8:1.25)))},250)}if(b.hasAttribute('data-map-reset')&&globe)globe.pointOfView({lat:25,lng:10,altitude:2.2},350);if(b.hasAttribute('data-map-expand')){container.classList.toggle('expanded');b.textContent=container.classList.contains('expanded')?'Collapse':'Expand'}};
   updateStatus();await mount();
  }
- function updateStatus(){if(!container)return;const known=points.filter(p=>p.latitude!=null&&p.longitude!=null).length;container.querySelector('.globe-status').textContent=`${known} located · ${points.length-known} unknown · Lime: Mythic beacon · Red: confirmed vulnerabilities · Orange: other hosts · Scroll to zoom`}
+ function updateStatus(){if(!container)return;const known=points.filter(p=>p.latitude!=null&&p.longitude!=null).length;container.querySelector('.globe-status').textContent=`${known} located · ${points.length-known} unknown · Red: pwned or confirmed vulnerability · Orange: other hosts · Scroll to zoom`}
  document.addEventListener('visibilitychange',()=>{if(globe){if(document.hidden)globe.pauseAnimation();else globe.resumeAnimation()}});
  return {render,destroy};
 })();
