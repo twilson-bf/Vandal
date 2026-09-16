@@ -1,17 +1,6 @@
 /* Adapted from LotusPetal coverage-globe.js; same local globe.gl renderer. */
 window.VandalMap=(()=>{
- const SVG_NS='http://www.w3.org/2000/svg';
- const LANDMARK_PATHS=[
-  'M12 6C15.3137 6 18 8.68629 18 12C18 15.3137 15.3137 18 12 18C8.68629 18 6 15.3137 6 12C6 8.68629 8.68629 6 12 6ZM12 8C9.79086 8 8 9.79086 8 12C8 14.2091 9.79086 16 12 16C14.2091 16 16 14.2091 16 12C16 9.79086 14.2091 8 12 8Z',
-  'M12 1C18.0751 1 23 5.92487 23 12C23 18.0751 18.0751 23 12 23C5.92487 23 1 18.0751 1 12C1 5.92487 5.92487 1 12 1ZM12 3C7.02944 3 3 7.02944 3 12C3 16.9706 7.02944 21 12 21C16.9706 21 21 16.9706 21 12C21 7.02944 16.9706 3 12 3Z'
- ];
- const DITHER='repeating-conic-gradient(#000 0% 25%, transparent 0% 50%)';
  let globe=null,container=null,overlay=null,markerNodes=[],resize=null,visible=null,points=[],flat=false,epoch=0,clusterFrame=0,clusterKey='';
- function landmark(size=24){
-  const svg=document.createElementNS(SVG_NS,'svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('width',size);svg.setAttribute('height',size);svg.setAttribute('aria-hidden','true');
-  for(const d of LANDMARK_PATHS){const path=document.createElementNS(SVG_NS,'path');path.setAttribute('d',d);path.setAttribute('fill','currentColor');svg.appendChild(path)}
-  return svg
- }
  // Cluster in screen pixels so separation follows both zoom and viewport size.
  function updateClusters(){
   clusterFrame=0;if(!globe||!overlay)return;
@@ -32,9 +21,10 @@ window.VandalMap=(()=>{
   clusters.forEach((node,index)=>{
    const el=markerNodes[index];if(!el)return;
    el.style.transform=`translate(${node.x+(node.offset||0)}px,${node.y}px) translate(-50%,-50%)`;
-   if(node.dot>.08){el.style.opacity='1';el.style.filter=`drop-shadow(0 0 7px ${node.pwned||node.confirmed?'#ff4055':'#ff8a24'})`;el.style.webkitMaskImage='none';el.style.maskImage='none'}
-   else if(node.dot<-.04){const depth=Math.min(1,(-node.dot-.04)*1.4),tile=Math.round(2+depth*8);el.style.opacity='1';el.style.filter=`drop-shadow(0 0 3px ${node.pwned||node.confirmed?'#ff405599':'#ff8a2499'})`;el.style.webkitMaskImage=DITHER;el.style.maskImage=DITHER;el.style.webkitMaskSize=`${tile}px ${tile}px`;el.style.maskSize=`${tile}px ${tile}px`}
-   else{el.style.opacity='1';el.style.filter='none';el.style.webkitMaskImage='none';el.style.maskImage='none'}
+   const front=node.dot>0;
+   el.style.opacity=front?'1':'0';
+   el.style.visibility=front?'visible':'hidden';
+   el.style.pointerEvents=front?'auto':'none';
   })
  }
  function scheduleClusters(){if(!clusterFrame)clusterFrame=requestAnimationFrame(updateClusters)}
@@ -53,10 +43,10 @@ window.VandalMap=(()=>{
   const view=globe.pointOfView();
   globe.pointOfView({...view,altitude:Math.max(.35,Math.min(5,view.altitude*Math.exp(Math.max(-1,Math.min(1,delta*.0015)))))},0);
  }
- function marker(node){const button=document.createElement('button');button.type='button';button.className='globe-marker'+(node.pwned?' pwned':node.confirmed?' confirmed':'');button.style.pointerEvents='auto';button.appendChild(landmark(Math.min(36,24+node.hosts.length*2)));if(node.hosts.length>1){const count=document.createElement('span');count.className='globe-marker-count';count.textContent=node.hosts.length;button.appendChild(count)}button.title=node.hosts.length+' host(s)'+(node.pwned?' · Mythic beacon observed':node.confirmed?' · Confirmed vulnerabilities':' · No confirmed vulnerabilities')+' · '+[...new Set(node.hosts.map(h=>h.country))].join(' · ');button.setAttribute('aria-label','View '+button.title);button.onclick=e=>{e.stopPropagation();showGroup(node)};return button}
+ function marker(node){const button=document.createElement('button');button.type='button';button.className='globe-marker'+(node.pwned?' pwned':node.confirmed?' confirmed':'');button.textContent=node.hosts.length>1?node.hosts.length:node.pwned?'◆':node.confirmed?'!':'◎';button.title=node.hosts.length+' host(s)'+(node.pwned?' · Mythic beacon observed':node.confirmed?' · Confirmed vulnerabilities':' · No confirmed vulnerabilities')+' · '+[...new Set(node.hosts.map(h=>h.country))].join(' · ');button.setAttribute('aria-label','View '+button.title);button.onclick=e=>{e.stopPropagation();showGroup(node)};return button}
  function stopGlobe(){cancelAnimationFrame(clusterFrame);clusterFrame=0;clusterKey='';markerNodes=[];overlay?.remove();overlay=null;if(globe)globe.controls().removeEventListener('change',scheduleClusters);resize?.disconnect();visible?.disconnect();resize=visible=null;if(globe){globe.pauseAnimation();globe._destructor?.();globe=null}}
  function destroy(){epoch++;stopGlobe();container=null}
- async function flatMap(){await world('#vandal-flat-map',points);for(const p of points){const dot=container?.querySelector(`circle[data-asset="${p.id}"]`);if(!dot)continue;const color=p.pwned||p.confirmed?'#ff4055':'#ff8a24',group=document.createElementNS(SVG_NS,'g');group.setAttribute('class','flat-landmark');group.setAttribute('color',color);group.setAttribute('transform',`translate(${Number(dot.getAttribute('cx'))-12} ${Number(dot.getAttribute('cy'))-12})`);group.style.pointerEvents='none';for(const d of LANDMARK_PATHS){const path=document.createElementNS(SVG_NS,'path');path.setAttribute('d',d);path.setAttribute('fill','currentColor');group.appendChild(path)}dot.setAttribute('r','12');dot.setAttribute('fill','transparent');dot.parentNode.appendChild(group);if(p.pwned)dot.querySelector('title').textContent+=' · Mythic beacon observed';else if(p.confirmed)dot.querySelector('title').textContent+=' · Confirmed vulnerabilities'}}
+ async function flatMap(){await world('#vandal-flat-map',points);for(const p of points){const dot=container?.querySelector(`circle[data-asset="${p.id}"]`);if(!dot)continue;if(p.pwned||p.confirmed)dot.setAttribute('fill','#ff4055');if(p.pwned)dot.querySelector('title').textContent+=' · Mythic beacon observed';else if(p.confirmed)dot.querySelector('title').textContent+=' · Confirmed vulnerabilities'}}
  async function mount(){const token=++epoch;stopGlobe();const stage=container.querySelector('.globe-stage');stage.innerHTML='';
   if(flat){stage.innerHTML='<div id="vandal-flat-map" class="map-box" style="height:100%"></div>';await flatMap();return}
   try{
