@@ -21,10 +21,20 @@ window.VandalMap=(()=>{
   clusters.forEach((node,index)=>{
    const el=markerNodes[index];if(!el)return;
    el.style.transform=`translate(${node.x+(node.offset||0)}px,${node.y}px) translate(-50%,-50%)`;
-   const front=node.dot>0;
-   el.style.opacity=front?'1':'0';
-   el.style.visibility=front?'visible':'hidden';
+   const front=node.dot>.08,rear=node.dot<-.04;
+   el.style.opacity='1';
+   el.style.visibility='visible';
    el.style.pointerEvents=front?'auto':'none';
+   if(rear){
+    const depth=Math.min(1,(-node.dot-.04)*1.4),tile=Math.round(2+depth*8),mask='repeating-conic-gradient(#000 0% 25%,transparent 0% 50%)';
+    el.style.filter='brightness(.72)';
+    el.style.webkitMaskImage=mask;el.style.maskImage=mask;
+    el.style.webkitMaskSize=`${tile}px ${tile}px`;el.style.maskSize=`${tile}px ${tile}px`;
+   }else{
+    el.style.filter=front?'':'brightness(.82)';
+    el.style.webkitMaskImage='none';el.style.maskImage='none';
+    el.style.webkitMaskSize='';el.style.maskSize='';
+   }
   });
   overlay.classList.add('ready')
  }
